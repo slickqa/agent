@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -16,12 +17,17 @@ import (
 func main() {
 	log.Println("=========== Initializing Agent ===========")
 
+	var groups string
 	parser := flag.NewFlagSetWithEnvPrefix(os.Args[0], "SLICK_AGENT", 0)
 	parser.StringVar(&ProgramOptions.ConfigurationLocation, "conf", "", "configuration location")
+	parser.StringVar(&groups, "groups", "", "comma separated list of groups")
 	err := parser.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatalf("Unable to parse command line arguments: %s", err.Error())
 	}
+
+	ProgramOptions.Groups = regexp.MustCompile(",[ ]?").Split(groups, -1)
+	log.Printf("Groups: %#v", ProgramOptions.Groups)
 
 	log.Printf("Loading Configuration from %s", ProgramOptions.ConfigurationLocation)
 
@@ -68,27 +74,28 @@ func main() {
 var (
 	ProgramOptions struct {
 		ConfigurationLocation string
+		Groups []string
 	}
 )
 
 type AgentStatus struct {
-	Provides []string
-	BrokenProvides []string
-	RunStatus string
-	Project string
-	Release string
-	Build string
-	Versions map[string]string
-	Hardware string
-	RequiredTestAttributes map[string]string
-	RanTest bool
-	Action string
-	ActionParameter string
-	IP string
-	Attributes map[string]string
-	ResultToRun *map[string]interface{}
-	Groups []string
-	ShouldExit bool
+	Provides []string `json:"provides"`
+	BrokenProvides []string `json:"broken"`
+	RunStatus string `json:"runStatus"`
+	Project string `json:"project,omitempty"`
+	Release string `json:"release,omitempty"`
+	Build string `json:"build,omitempty"`
+	Versions map[string]string `json:"versions,omitempty"`
+	Hardware string `json:"hardware,omitempty"`
+	RequiredTestAttributes map[string]string `json:"requiredAttrs,omitempty"`
+	RanTest bool `json:"ranTest"`
+	Action string `json:"action,omitempty"`
+	ActionParameter string `json:"actionParameter,omitempty"`
+	IP string `json:"IP,omitempty"`
+	Attributes map[string]string `json:"attributes"`
+	ResultToRun map[string]interface{} `json:"testcase"`
+	Groups []string `json:"groups"`
+	ShouldExit bool `json:"shouldExit"`
 }
 
 type AgentConfiguration struct {
@@ -98,10 +105,10 @@ type AgentConfiguration struct {
 	BrokenDiscovery []PhaseConfiguration `yaml:"broke-discovery,omitempty"`
 	GetStatus []PhaseConfiguration `yaml:"get-status,omitempty"`
 	UpdateStatus []PhaseConfiguration `yaml:"update-status,omitempty"`
-	RunTest Action `yaml:"run-test,omitempty"`
+	RunTest []PhaseConfiguration `yaml:"run-test,omitempty"`
 	NoTest []PhaseConfiguration `yaml:"no-test,omitempty"`
 	Cleanup []PhaseConfiguration `yaml:"cleanup,omitempty"`
-	ActionMap map[string]Action `yaml:"action-map,omitempty"`
+	ActionMap map[string]PhaseConfiguration `yaml:"action-map,omitempty"`
 	GetTest []PhaseConfiguration `yaml:"get-test,omitempty"`
 	Slick SlickConfiguration `yaml:"slick,omitempty"`
 	CheckForConfigurationEvery string `yaml:"check-for-configuration-every,omitempty"`
@@ -128,11 +135,6 @@ type Agent struct {
 
 type SlickConfiguration struct {
 	BaseUrl string `yaml:"base-url"`
-}
-
-type Action struct {
-	HttpUrl string `yaml:"http-url,omitempty"`
-	Command string `yaml:"command,omitempty"`
 }
 
 type PhaseConfiguration struct {
@@ -216,9 +218,12 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 }
 
 func DefaultStatus() AgentStatus {
+	groups := make([]string, len(ProgramOptions.Groups))
+	copy(groups, ProgramOptions.Groups)
 	return AgentStatus{
 		RunStatus: "IDLE",
 		RanTest: false,
+		Groups: groups,
 	}
 }
 
@@ -274,5 +279,10 @@ func (agent *Agent) HandleSleep() {
 	} else {
 		time.Sleep(agent.Cache.Sleep.NoTest)
 	}
+}
+
+func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, statusContext string) error {
+
+	return nil
 }
 
