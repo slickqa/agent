@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"github.com/namsral/flag"
+	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
@@ -149,11 +151,12 @@ func LoadConfiguration() (AgentConfiguration, error) {
 		response, err := http.Get(ProgramOptions.ConfigurationLocation)
 		if err == nil {
 			if response.StatusCode == 200 {
-				var buf []byte
-				_, err = response.Body.Read(buf)
+				buf, err := ioutil.ReadAll(response.Body)
 				if err == nil {
 					err = yaml.Unmarshal(buf, &config)
 				}
+			} else {
+				err = errors.New(fmt.Sprintf("http status code was %d", response.StatusCode))
 			}
 		}
 	} else {
