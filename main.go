@@ -1,17 +1,34 @@
 package main
 
 import (
+	"github.com/namsral/flag"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	"log"
+	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
 func main() {
 	log.Println("=========== Initializing Agent ===========")
+
+	parser := flag.NewFlagSetWithEnvPrefix(os.Args[0], "SLICK_AGENT", 0)
+	parser.StringVar(&ProgramOptions.ConfigurationLocation, "conf", "", "configuration location")
+	err := parser.Parse(os.Args[1:])
+	if err != nil {
+		log.Fatalf("Unable to parse command line arguments: %s", err.Error())
+	}
+
 	agent := Agent{}
-	err := agent.LoadConfiguration()
+	agent.Config, err = LoadConfiguration()
 	if err != nil {
 		log.Fatalf("Error loading configuration: %s", err.Error())
 	}
+	output, _ := yaml.Marshal(agent.Config)
+	log.Printf("Configuration:\n%s", string(output))
+
 	for !agent.Status.ShouldExit {
 		agent.CheckConfiguration()
 		agent.HandleLoopStart()
@@ -35,11 +52,17 @@ func main() {
 			}
 			agent.HandleStatusUpdate()
 		}
-		agent.HandleCleanUp()
+		agent.HandleCleanup()
 		agent.HandleSleep()
 	}
 	log.Println("Agent requested to exit!")
 }
+
+var (
+	ProgramOptions struct {
+		ConfigurationLocation string
+	}
+)
 
 type AgentStatus struct {
 	Provides []string
@@ -61,24 +84,21 @@ type AgentStatus struct {
 	ShouldExit bool
 }
 
-type Integration interface {
-	call(*AgentStatus) error
-}
-
 type AgentConfiguration struct {
-	LoopStart []PhaseConfiguration
-	CheckForAction []PhaseConfiguration
-	Discovery []PhaseConfiguration
-	BrokenDiscovery []PhaseConfiguration
-	GetStatus []PhaseConfiguration
-	UpdateStatus []PhaseConfiguration
-	RunTest *Action
-	NoTest []PhaseConfiguration
-	CleanUp []PhaseConfiguration
-	ActionMap map[string]Action
-	GetTest []PhaseConfiguration
-	Slick *SlickConfiguration
-	CheckForConfigurationEvery *string
+	LoopStart []PhaseConfiguration `yaml:"loop-start,omitempty"`
+	CheckForAction []PhaseConfiguration `yaml:"check-for-action,omitempty"`
+	Discovery []PhaseConfiguration `yaml:"discovery,omitempty"`
+	BrokenDiscovery []PhaseConfiguration `yaml:"broke-discovery,omitempty"`
+	GetStatus []PhaseConfiguration `yaml:"get-status,omitempty"`
+	UpdateStatus []PhaseConfiguration `yaml:"update-status,omitempty"`
+	RunTest Action `yaml:"run-test,omitempty"`
+	NoTest []PhaseConfiguration `yaml:"no-test,omitempty"`
+	Cleanup []PhaseConfiguration `yaml:"cleanup,omitempty"`
+	ActionMap map[string]Action `yaml:"action-map,omitempty"`
+	GetTest []PhaseConfiguration `yaml:"get-test,omitempty"`
+	Slick SlickConfiguration `yaml:"slick,omitempty"`
+	CheckForConfigurationEvery string `yaml:"check-for-configuration-every,omitempty"`
+	Sleep SleepConfiguration `yaml:"sleep,omitempty"`
 }
 
 type Agent struct {
@@ -88,26 +108,61 @@ type Agent struct {
 }
 
 type SlickConfiguration struct {
-	BaseUrl string
+	BaseUrl string `yaml:"base-url"`
 }
 
 type Action struct {
-	HttpUrl *string
-	Command *string
+	HttpUrl string `yaml:"http-url,omitempty"`
+	Command string `yaml:"command,omitempty"`
 }
 
 type PhaseConfiguration struct {
-	HttpUrl *string
-	Command *string
-	WriteFile *string
-	ReadFile *string
-	StaticList *[]string
-	StaticMap *map[string]string
-	StaticValue *string
+	HttpUrl string `yaml:"http-url,omitempty"`
+	Command string `yaml:"command,omitempty"`
+	WriteFile string `yaml:"write-file,omitempty"`
+	ReadFile string `yaml:"read-file,omitempty"`
+	StaticList []string `yaml:"static-list,omitempty,flow"`
+	StaticMap map[string]string `yaml:"static-map,omitempty"`
+	StaticValue string `yaml:"static-value,omitempty"`
 }
 
-func (agent *Agent) LoadConfiguration() (error) {
-	return nil
+type SleepConfiguration struct {
+	AfterTest string `yaml:"after-test,omitempty"`
+	NoTest string `yaml:"no-test,omitempty"`
+}
+
+func DefaultConfiguration() AgentConfiguration {
+	return AgentConfiguration{
+		CheckForConfigurationEvery: "5s",
+		Sleep: SleepConfiguration{
+			AfterTest: "500ms",
+			NoTest: "2s",
+		},
+	}
+}
+
+func LoadConfiguration() (AgentConfiguration, error) {
+	config := DefaultConfiguration()
+	var err error
+
+	if strings.HasPrefix(ProgramOptions.ConfigurationLocation, "http") {
+		response, err := http.Get(ProgramOptions.ConfigurationLocation)
+		if err == nil {
+			if response.StatusCode == 200 {
+				var buf []byte
+				_, err = response.Body.Read(buf)
+				if err == nil {
+					err = yaml.Unmarshal(buf, &config)
+				}
+			}
+		}
+	} else {
+		buf, err := ioutil.ReadFile(ProgramOptions.ConfigurationLocation)
+		if err == nil {
+			err = yaml.Unmarshal(buf, &config)
+		}
+	}
+	return config, err
 }
 
 func (agent *Agent) CheckConfiguration() {
@@ -143,7 +198,7 @@ func (agent *Agent) HandleRunTest() {
 func (agent *Agent) HandleNoTest() {
 }
 
-func (agent *Agent) HandleCleanUp() {
+func (agent *Agent) HandleCleanup() {
 }
 
 func (agent *Agent) HandleSleep() {

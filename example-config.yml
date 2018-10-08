@@ -1,0 +1,14 @@
+slick:
+  base-url: http://demo.slickqa.com
+discovery:
+  - static-list: [something, else]
+update-status:
+  - write-file: /tmp/agent-status.yml
+get-status:
+  - http-url: http://manager/agents/foo/status
+run-test:
+  - command: /usr/bin/run-test
+check-for-configuration-every: 5s
+sleep:
+  after-test: 500ms
+  no-test: 2s
