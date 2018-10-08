@@ -1,9 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/namsral/flag"
-	"github.com/pkg/errors"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
@@ -23,15 +23,19 @@ func main() {
 		log.Fatalf("Unable to parse command line arguments: %s", err.Error())
 	}
 
+	log.Printf("Loading Configuration from %s", ProgramOptions.ConfigurationLocation)
+
 	agent := Agent{}
-	agent.Config, err = LoadConfiguration()
+	agent.Config, agent.Cache, err = LoadConfiguration()
 	if err != nil {
 		log.Fatalf("Error loading configuration: %s", err.Error())
 	}
+	agent.LastConfigurationCheck = time.Now()
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
 
 	for !agent.Status.ShouldExit {
+		agent.Status = DefaultStatus()
 		agent.CheckConfiguration()
 		agent.HandleLoopStart()
 		agent.HandleCheckForAction()
@@ -48,6 +52,7 @@ func main() {
 			agent.HandleGetTest()
 			agent.HandleStatusUpdate()
 			if agent.Status.ResultToRun != nil {
+				agent.RanTest = true
 				agent.HandleRunTest()
 			} else {
 				agent.HandleNoTest()
@@ -103,10 +108,22 @@ type AgentConfiguration struct {
 	Sleep SleepConfiguration `yaml:"sleep,omitempty"`
 }
 
+type ParsedConfigurationOptions struct {
+	Sleep ParsedSleepOptions
+	CheckForConfigurationEvery time.Duration
+}
+
+type ParsedSleepOptions struct {
+	AfterTest time.Duration
+	NoTest time.Duration
+}
+
 type Agent struct {
 	Config AgentConfiguration
 	Status AgentStatus
 	LastConfigurationCheck time.Time
+	RanTest bool
+	Cache ParsedConfigurationOptions
 }
 
 type SlickConfiguration struct {
@@ -133,18 +150,24 @@ type SleepConfiguration struct {
 	NoTest string `yaml:"no-test,omitempty"`
 }
 
-func DefaultConfiguration() AgentConfiguration {
+func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
 	return AgentConfiguration{
 		CheckForConfigurationEvery: "5s",
 		Sleep: SleepConfiguration{
 			AfterTest: "500ms",
 			NoTest: "2s",
 		},
+	}, ParsedConfigurationOptions{
+		CheckForConfigurationEvery: 5 * time.Second,
+		Sleep: ParsedSleepOptions{
+			AfterTest: 500 * time.Millisecond,
+			NoTest: 2 * time.Second,
+		},
 	}
 }
 
-func LoadConfiguration() (AgentConfiguration, error) {
-	config := DefaultConfiguration()
+func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error) {
+	config, parsed := DefaultConfiguration()
 	var err error
 
 	if strings.HasPrefix(ProgramOptions.ConfigurationLocation, "http") {
@@ -165,10 +188,51 @@ func LoadConfiguration() (AgentConfiguration, error) {
 			err = yaml.Unmarshal(buf, &config)
 		}
 	}
-	return config, err
+
+	if err == nil {
+		d, err := time.ParseDuration(config.CheckForConfigurationEvery)
+		if err == nil {
+			parsed.CheckForConfigurationEvery = d
+		} else {
+			log.Printf("Using default of 5 seconds, Error in check-for-configuration-every %#v: %s", config.CheckForConfigurationEvery, err.Error())
+		}
+
+		d, err = time.ParseDuration(config.Sleep.AfterTest)
+		if err == nil {
+			parsed.Sleep.AfterTest = d
+		} else {
+			log.Printf("Using default of 500 milliseconds, Error in sleep.after-test %#v: %s", config.Sleep.AfterTest, err.Error())
+		}
+		d, err = time.ParseDuration(config.Sleep.NoTest)
+		if err == nil {
+			parsed.Sleep.NoTest = d
+		} else {
+			log.Printf("Using default of 2 seconds, Error in sleep.no-test %#v: %s", config.Sleep.NoTest, err.Error())
+		}
+		// hide parsing errors since we use defaults
+		err = nil
+	}
+	return config, parsed, err
+}
+
+func DefaultStatus() AgentStatus {
+	return AgentStatus{
+		RunStatus: "IDLE",
+		RanTest: false,
+	}
 }
 
 func (agent *Agent) CheckConfiguration() {
+	if time.Now().After(agent.LastConfigurationCheck.Add(agent.Cache.CheckForConfigurationEvery)) {
+		config, cache, err := LoadConfiguration()
+		if err == nil {
+			agent.Config = config
+			agent.Cache = cache
+		} else {
+			log.Printf("Error loading configuration, using old configuration: %s", err.Error())
+		}
+		agent.LastConfigurationCheck = time.Now()
+	}
 }
 
 func (agent *Agent) HandleLoopStart() {
@@ -205,5 +269,10 @@ func (agent *Agent) HandleCleanup() {
 }
 
 func (agent *Agent) HandleSleep() {
+	if agent.RanTest {
+		time.Sleep(agent.Cache.Sleep.AfterTest)
+	} else {
+		time.Sleep(agent.Cache.Sleep.NoTest)
+	}
 }
 
