@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
@@ -9,7 +10,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -18,16 +21,31 @@ func main() {
 	log.Println("================= Initializing Agent =================")
 
 	var groups string
+
+	if runtime.GOOS == "windows" {
+		ProgramOptions.ShellCommand = "cmd.exe"
+		ProgramOptions.ShellOpt = "/C"
+	} else {
+		ProgramOptions.ShellCommand = "/bin/bash"
+		ProgramOptions.ShellOpt = "-c"
+	}
+
 	parser := flag.NewFlagSetWithEnvPrefix(os.Args[0], "SLICK_AGENT", 0)
 	parser.StringVar(&ProgramOptions.ConfigurationLocation, "conf", "", "configuration location")
 	parser.StringVar(&groups, "groups", "", "comma separated list of groups")
+	parser.StringVar(&ProgramOptions.ShellCommand, "shell", ProgramOptions.ShellCommand, "Shell to use for command execution.")
+	parser.StringVar(&ProgramOptions.ShellOpt, "shell-arg", ProgramOptions.ShellOpt, "Option to pass to shell for command execution.")
 	parser.BoolVar(&ProgramOptions.Debug, "debug", false, "Enable debug logging for extra info.")
 	err := parser.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatalf("Unable to parse command line arguments: %s", err.Error())
 	}
 
-	ProgramOptions.Groups = regexp.MustCompile(",[ ]?").Split(groups, -1)
+	if groups != "" {
+		ProgramOptions.Groups = regexp.MustCompile(",[ ]?").Split(groups, -1)
+	} else {
+		ProgramOptions.Groups = make([]string, 0)
+	}
 
 	debug("Program Options: \n%+v", ProgramOptions)
 	log.Printf("Loading Configuration from %s", ProgramOptions.ConfigurationLocation)
@@ -43,7 +61,7 @@ func main() {
 
 	for !agent.Status.ShouldExit {
 		debugln("Top of loop, initializing status.")
-		agent.Status = DefaultStatus()
+		agent.Status = agent.DefaultStatus()
 		agent.CheckConfiguration()
 		agent.HandleLoopStart()
 		agent.HandleCheckForAction()
@@ -78,6 +96,8 @@ var (
 		ConfigurationLocation string
 		Groups []string
 		Debug bool
+		ShellCommand string
+		ShellOpt string
 	}
 )
 
@@ -85,9 +105,7 @@ type AgentStatus struct {
 	Provides []string `json:"provides"`
 	BrokenProvides []string `json:"broken"`
 	RunStatus string `json:"runStatus"`
-	Project string `json:"project,omitempty"`
-	Release string `json:"release,omitempty"`
-	Build string `json:"build,omitempty"`
+	Projects []ProjectReleaseBuild `json:"projects,omitempty"`
 	Versions map[string]string `json:"versions,omitempty"`
 	Hardware string `json:"hardware,omitempty"`
 	RequiredTestAttributes map[string]string `json:"requiredAttrs,omitempty"`
@@ -101,7 +119,14 @@ type AgentStatus struct {
 	ShouldExit bool `json:"shouldExit"`
 }
 
+type ProjectReleaseBuild struct {
+	Name string `json:"name" yaml:"name"`
+	Release string `json:"release,omitempty" yaml:"release,omitempty"`
+	Build string `json:"build,omitempty" yaml:"build,omitempty"`
+}
+
 type AgentConfiguration struct {
+	Projects []ProjectReleaseBuild `yaml:"projects,omitempty"`
 	LoopStart []PhaseConfiguration `yaml:"loop-start,omitempty"`
 	CheckForAction []PhaseConfiguration `yaml:"check-for-action,omitempty"`
 	Discovery []PhaseConfiguration `yaml:"discovery,omitempty"`
@@ -224,13 +249,19 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 	return config, parsed, err
 }
 
-func DefaultStatus() AgentStatus {
+func (agent *Agent) DefaultStatus() AgentStatus {
 	groups := make([]string, len(ProgramOptions.Groups))
+	projects := make([]ProjectReleaseBuild, len(agent.Config.Projects))
 	copy(groups, ProgramOptions.Groups)
+	copy(projects, agent.Config.Projects)
 	return AgentStatus{
 		RunStatus: "IDLE",
 		RanTest: false,
 		Groups: groups,
+		Provides: make([]string, 0),
+		BrokenProvides: make([]string, 0),
+		Attributes: make(map[string]string),
+		Projects: projects,
 	}
 }
 
@@ -250,30 +281,56 @@ func (agent *Agent) CheckConfiguration() {
 
 func (agent *Agent) HandleLoopStart() {
 	debug("Inside HandleLoopStart, there are %d configs to process.", len(agent.Config.LoopStart))
+	for _, phase := range agent.Config.LoopStart {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleCheckForAction() {
 	debug("Inside HandleCheckForAction, there are %d configs to process.", len(agent.Config.CheckForAction))
+	for _, phase := range agent.Config.CheckForAction {
+		phase.ApplyToStatus(&agent.Status, &agent.Status.Action, nil)
+	}
 }
 
 func (agent *Agent) HandlePerformAction() {
 	debug("Inside HandlePerformAction, Action: %#v Parameter: %#v", agent.Status.Action, agent.Status.ActionParameter)
+	config, ok := agent.Config.ActionMap[agent.Status.Action]
+	if !ok {
+		log.Printf("Unable to find action %#v in action map %+v from configuration value action-map from %s", agent.Status.Action, agent.Config.ActionMap, ProgramOptions.ConfigurationLocation)
+		return
+	}
+	config.ApplyToStatus(&agent.Status, nil, nil)
+
+	// TODO handler for successful and unsuccessful action
 }
 
 func (agent *Agent) HandleDiscovery() {
 	debug("Inside HandleDiscovery, there are %d configs to process.", len(agent.Config.Discovery))
+	for _, phase := range agent.Config.Discovery {
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.Provides)
+	}
 }
 
 func (agent *Agent) HandleBrokenDiscovery() {
 	debug("Inside HandleBrokenDiscovery, there are %d configs to process.", len(agent.Config.BrokenDiscovery))
+	for _, phase := range agent.Config.BrokenDiscovery {
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.BrokenProvides)
+	}
 }
 
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
+	for _, phase := range agent.Config.UpdateStatus {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleGetCurrentStatus() {
 	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
+	for _, phase := range agent.Config.GetStatus {
+		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil)
+	}
 }
 
 func (agent *Agent) HandleGetTest() {
@@ -290,6 +347,9 @@ func (agent *Agent) HandleNoTest() {
 
 func (agent *Agent) HandleCleanup() {
 	debug("Inside HandleCleanup, there are %d configs to process.", len(agent.Config.Cleanup))
+	for _, phase := range agent.Config.Cleanup {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleSleep() {
@@ -297,16 +357,88 @@ func (agent *Agent) HandleSleep() {
 		debug("HandleSleep: After a test, sleeping %s", agent.Cache.Sleep.AfterTest)
 		time.Sleep(agent.Cache.Sleep.AfterTest)
 	} else {
-		time.Sleep(agent.Cache.Sleep.NoTest)
 		debug("HandleSleep: No test ran, sleeping %s", agent.Cache.Sleep.NoTest)
+		time.Sleep(agent.Cache.Sleep.NoTest)
 	}
 }
 
-func (agent *Agent) RunCommand(command string) ([]byte, error) {
-	return []byte{}, nil
-}
+func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string) error {
+	if conf.Command != "" {
+		tmpfile, err := ioutil.TempFile("", "slick-agent-status-*.yml")
+		tmpFilename := tmpfile.Name()
+		if err != nil {
+			log.Printf("Unable to write temp file with status before running command %s: %s", conf.Command, err.Error())
+			return err
+		}
+		defer os.Remove(tmpFilename)
 
-func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, statusContext string) error {
+		debug("Writing agent status to %s", tmpFilename)
+		content, err := json.Marshal(status)
+		if err != nil {
+			log.Printf("Unable to marshal status to json before running command %s: %s", conf.Command, err.Error())
+			return err
+		}
+		_, err = tmpfile.Write(content)
+		if err != nil {
+			log.Printf("Error writing temp file %s before running %s: %s", tmpFilename, conf.Command, err.Error())
+			return err
+		}
+		tmpfile.Close()
+
+		debug("Running Command: %s %s %#v", ProgramOptions.ShellCommand, ProgramOptions.ShellOpt, conf.Command)
+		cmd := exec.Command(ProgramOptions.ShellCommand, ProgramOptions.ShellOpt, conf.Command)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("SLICK_AGENT_STATUS=%s", tmpFilename))
+		if err := cmd.Run(); err != nil {
+			log.Printf("Command %#v encountered an error: %s", conf.Command, err.Error())
+			return err
+		}
+		debug("Reading status back in from %s", tmpFilename)
+		content, err = ioutil.ReadFile(tmpFilename)
+		if err != nil {
+			log.Printf("Unable to read state from %s after running command %#v: %s", tmpFilename, conf.Command, err.Error())
+			return err
+		}
+
+		newStatus := *status
+		err = json.Unmarshal(content, &newStatus)
+		if err != nil {
+			log.Printf("Problem parsing state from %s after running command %#v: %s", tmpFilename, conf.Command, err.Error())
+			return err
+		}
+		debug("Status after command:\n%+v", newStatus)
+		*status = newStatus
+		return nil
+	} else if conf.WriteFile != "" {
+		content, err := json.Marshal(status)
+		if err != nil {
+			log.Printf("Error serializing agent status to json before writing to file %s: %s", conf.WriteFile, err.Error())
+			return err
+		}
+		err = ioutil.WriteFile(conf.WriteFile, content, 0644)
+		if err != nil {
+			log.Printf("Error writing agent status to %s: %s", conf.WriteFile, err.Error())
+			return err
+		}
+	} else if conf.HttpUrl != "" {
+		//TODO handle URL posting
+	} else if conf.StaticValue != "" {
+		if staticVar != nil {
+			*staticVar = conf.StaticValue
+		} else if staticArray != nil {
+			*staticArray = append(*staticArray, conf.StaticValue)
+		} else {
+			log.Printf("Attempted to set static value %#v but that is invalid during this phase, ignoring.", conf.StaticValue)
+			return fmt.Errorf("nil staticVar and staticArray during this phase, cannot set %#v", conf.StaticValue)
+		}
+	} else if len(conf.StaticList) > 0 {
+		if staticArray != nil {
+			*staticArray = append(*staticArray, conf.StaticList...)
+		} else {
+			log.Printf("Attempted to set static list %+v but that is invalid during this phase, ignoring.", conf.StaticList)
+			return fmt.Errorf("nil staticArray, can't set value %#v during this phase", conf.StaticList)
+		}
+	} else if len(conf.StaticMap) > 0 {
+	}
 
 	return nil
 }

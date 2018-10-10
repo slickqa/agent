@@ -1,5 +1,9 @@
 slick:
   base-url: http://demo.slickqa.com
+projects:
+  - name: Foo
+    release: Bar
+    build: "1"
 discovery:
   - static-list: [something, else]
 update-status:
