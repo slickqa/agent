@@ -15,20 +15,21 @@ import (
 )
 
 func main() {
-	log.Println("=========== Initializing Agent ===========")
+	log.Println("================= Initializing Agent =================")
 
 	var groups string
 	parser := flag.NewFlagSetWithEnvPrefix(os.Args[0], "SLICK_AGENT", 0)
 	parser.StringVar(&ProgramOptions.ConfigurationLocation, "conf", "", "configuration location")
 	parser.StringVar(&groups, "groups", "", "comma separated list of groups")
+	parser.BoolVar(&ProgramOptions.Debug, "debug", false, "Enable debug logging for extra info.")
 	err := parser.Parse(os.Args[1:])
 	if err != nil {
 		log.Fatalf("Unable to parse command line arguments: %s", err.Error())
 	}
 
 	ProgramOptions.Groups = regexp.MustCompile(",[ ]?").Split(groups, -1)
-	log.Printf("Groups: %#v", ProgramOptions.Groups)
 
+	debug("Program Options: \n%+v", ProgramOptions)
 	log.Printf("Loading Configuration from %s", ProgramOptions.ConfigurationLocation)
 
 	agent := Agent{}
@@ -41,6 +42,7 @@ func main() {
 	log.Printf("Configuration:\n%s", string(output))
 
 	for !agent.Status.ShouldExit {
+		debugln("Top of loop, initializing status.")
 		agent.Status = DefaultStatus()
 		agent.CheckConfiguration()
 		agent.HandleLoopStart()
@@ -75,6 +77,7 @@ var (
 	ProgramOptions struct {
 		ConfigurationLocation string
 		Groups []string
+		Debug bool
 	}
 )
 
@@ -173,14 +176,17 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 	var err error
 
 	if strings.HasPrefix(ProgramOptions.ConfigurationLocation, "http") {
+		debug("Determined configuration is a url, fetching %#v", ProgramOptions.ConfigurationLocation)
 		response, err := http.Get(ProgramOptions.ConfigurationLocation)
 		if err == nil {
 			if response.StatusCode == 200 {
+				debug("Reading %d bytes from body of response from %#v", response.ContentLength, ProgramOptions.ConfigurationLocation)
 				buf, err := ioutil.ReadAll(response.Body)
 				if err == nil {
 					err = yaml.Unmarshal(buf, &config)
 				}
 			} else {
+				debug("Response had a bad status code of %d.  Full response:\n%+v", response)
 				err = errors.New(fmt.Sprintf("http status code was %d", response.StatusCode))
 			}
 		}
@@ -214,6 +220,7 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 		// hide parsing errors since we use defaults
 		err = nil
 	}
+	debug("Loaded Configuration:\n%+v\nParsed Configuration: %+v, Error: %+v", config, parsed, err)
 	return config, parsed, err
 }
 
@@ -228,6 +235,7 @@ func DefaultStatus() AgentStatus {
 }
 
 func (agent *Agent) CheckConfiguration() {
+	debug("Checking to see if we need to reload config.  Last check happened at %s", agent.LastConfigurationCheck.String())
 	if time.Now().After(agent.LastConfigurationCheck.Add(agent.Cache.CheckForConfigurationEvery)) {
 		config, cache, err := LoadConfiguration()
 		if err == nil {
@@ -241,44 +249,61 @@ func (agent *Agent) CheckConfiguration() {
 }
 
 func (agent *Agent) HandleLoopStart() {
+	debug("Inside HandleLoopStart, there are %d configs to process.", len(agent.Config.LoopStart))
 }
 
 func (agent *Agent) HandleCheckForAction() {
+	debug("Inside HandleCheckForAction, there are %d configs to process.", len(agent.Config.CheckForAction))
 }
 
 func (agent *Agent) HandlePerformAction() {
+	debug("Inside HandlePerformAction, Action: %#v Parameter: %#v", agent.Status.Action, agent.Status.ActionParameter)
 }
 
 func (agent *Agent) HandleDiscovery() {
+	debug("Inside HandleDiscovery, there are %d configs to process.", len(agent.Config.Discovery))
 }
 
 func (agent *Agent) HandleBrokenDiscovery() {
+	debug("Inside HandleBrokenDiscovery, there are %d configs to process.", len(agent.Config.BrokenDiscovery))
 }
 
 func (agent *Agent) HandleStatusUpdate() {
+	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 }
 
 func (agent *Agent) HandleGetCurrentStatus() {
+	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
 }
 
 func (agent *Agent) HandleGetTest() {
+	debug("Inside HandleGetTest, there are %d configs to process.", len(agent.Config.GetTest))
 }
 
 func (agent *Agent) HandleRunTest() {
+	debug("Inside HandleRunTest, there are %d configs to process.  Current Test:\n%+v", len(agent.Config.RunTest), agent.Status.ResultToRun)
 }
 
 func (agent *Agent) HandleNoTest() {
+	debug("Inside HandleNoTest, there are %d configs to process.", len(agent.Config.NoTest))
 }
 
 func (agent *Agent) HandleCleanup() {
+	debug("Inside HandleCleanup, there are %d configs to process.", len(agent.Config.Cleanup))
 }
 
 func (agent *Agent) HandleSleep() {
 	if agent.RanTest {
+		debug("HandleSleep: After a test, sleeping %s", agent.Cache.Sleep.AfterTest)
 		time.Sleep(agent.Cache.Sleep.AfterTest)
 	} else {
 		time.Sleep(agent.Cache.Sleep.NoTest)
+		debug("HandleSleep: No test ran, sleeping %s", agent.Cache.Sleep.NoTest)
 	}
+}
+
+func (agent *Agent) RunCommand(command string) ([]byte, error) {
+	return []byte{}, nil
 }
 
 func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, statusContext string) error {
@@ -286,3 +311,14 @@ func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, statusContext
 	return nil
 }
 
+func debug(format string, v ...interface{}) {
+	if ProgramOptions.Debug {
+		log.Printf(format, v...)
+	}
+}
+
+func debugln(v ...interface{}) {
+	if ProgramOptions.Debug {
+		log.Println(v...)
+	}
+}
