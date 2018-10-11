@@ -119,6 +119,7 @@ type AgentStatus struct {
 	ResultToRun map[string]interface{} `json:"testcase"`
 	Groups []string `json:"groups"`
 	ShouldExit bool `json:"shouldExit"`
+	AgentName string `json:"agentName"`
 }
 
 type ProjectReleaseBuild struct {
@@ -191,6 +192,7 @@ func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
 			AfterTest: "500ms",
 			NoTest: "2s",
 		},
+		Slick: SlickConfiguration{},
 	}, ParsedConfigurationOptions{
 		CheckForConfigurationEvery: 5 * time.Second,
 		Sleep: ParsedSleepOptions{
@@ -266,6 +268,7 @@ func (agent *Agent) DefaultStatus() AgentStatus {
 		BrokenProvides: make([]string, 0),
 		Attributes: make(map[string]string),
 		Projects: projects,
+		AgentName: agent.Config.Slick.AgentName,
 	}
 }
 
@@ -370,9 +373,10 @@ func (agent *Agent) RequestResultFromSlickQueue(query map[string]interface{}) ma
 		log.Printf("Error building query to slick for test: %s", err.Error())
 		return nil
 	}
-	resp, err := http.Post(agent.Config.Slick.BaseUrl + "/api/results/queue/" + agent.Config.Slick.AgentName,
-		"application/json",
-		bytes.NewBuffer(jsonContentBody))
+	url := agent.Config.Slick.BaseUrl + "/api/results/queue/" + agent.Config.Slick.AgentName
+	debug("URL: %s", url)
+	debug("JSON: %s", string(jsonContentBody))
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonContentBody))
 	if err != nil {
 		log.Printf("Error making request to slick for test to run: %s", err.Error())
 		return nil
@@ -383,7 +387,7 @@ func (agent *Agent) RequestResultFromSlickQueue(query map[string]interface{}) ma
 			log.Printf("Error occurred while trying to read response from slick: %s", err.Error())
 			return nil
 		}
-		err = json.Unmarshal(body, result)
+		err = json.Unmarshal(body, &result)
 		if err != nil {
 			log.Printf("Error occurred while trying to parse json from slick: %s", err.Error())
 			return nil
@@ -391,6 +395,7 @@ func (agent *Agent) RequestResultFromSlickQueue(query map[string]interface{}) ma
 		return result
 	}
 	debug("Response code from slick when requesting result from queue: %d", resp.StatusCode)
+	debug("Response:\n%+v", resp)
 	return nil
 }
 
