@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,6 +76,7 @@ func main() {
 		agent.HandleGetCurrentStatus()
 		agent.HandleStatusUpdate()
 		if agent.Status.RunStatus == "IDLE" {
+			agent.HandleBeforeGetTest()
 			agent.HandleGetTest()
 			agent.HandleStatusUpdate()
 			if agent.Status.ResultToRun != nil {
@@ -137,6 +139,7 @@ type AgentConfiguration struct {
 	NoTest []PhaseConfiguration `yaml:"no-test,omitempty"`
 	Cleanup []PhaseConfiguration `yaml:"cleanup,omitempty"`
 	ActionMap map[string]PhaseConfiguration `yaml:"action-map,omitempty"`
+	BeforeGetTest []PhaseConfiguration `yaml:"before-get-test,omitempty"`
 	GetTest []PhaseConfiguration `yaml:"get-test,omitempty"`
 	Slick SlickConfiguration `yaml:"slick,omitempty"`
 	CheckForConfigurationEvery string `yaml:"check-for-configuration-every,omitempty"`
@@ -163,6 +166,7 @@ type Agent struct {
 
 type SlickConfiguration struct {
 	BaseUrl string `yaml:"base-url"`
+	AgentName string `yaml:"agent-name"`
 }
 
 type PhaseConfiguration struct {
@@ -333,16 +337,109 @@ func (agent *Agent) HandleGetCurrentStatus() {
 	}
 }
 
+func (agent *Agent) HandleBeforeGetTest() {
+	debug("Inside HandleBeforeGetTest, there are %d configs to process.", len(agent.Config.BeforeGetTest))
+	for _, phase := range agent.Config.BeforeGetTest {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
+}
+
+func (status *AgentStatus) getNonBrokenProvides() []string {
+	var exists = struct{}{}
+	providesSet := make(map[string]struct{})
+	for _, provide := range status.Provides {
+		providesSet[provide] = exists
+	}
+	for _, broken := range status.BrokenProvides {
+		delete(providesSet, broken)
+	}
+
+	provides := make([]string, len(providesSet))
+	i := 0
+	for provide := range providesSet {
+		provides[i] = provide
+		i++
+	}
+	return provides
+}
+
+func (agent *Agent) RequestResultFromSlickQueue(query map[string]interface{}) map[string]interface{} {
+	var result map[string]interface{} = nil
+	jsonContentBody, err := json.Marshal(query)
+	if err != nil {
+		log.Printf("Error building query to slick for test: %s", err.Error())
+		return nil
+	}
+	resp, err := http.Post(agent.Config.Slick.BaseUrl + "/api/results/queue/" + agent.Config.Slick.AgentName,
+		"application/json",
+		bytes.NewBuffer(jsonContentBody))
+	if err != nil {
+		log.Printf("Error making request to slick for test to run: %s", err.Error())
+		return nil
+	}
+	if resp.StatusCode == 200 {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Error occurred while trying to read response from slick: %s", err.Error())
+			return nil
+		}
+		err = json.Unmarshal(body, result)
+		if err != nil {
+			log.Printf("Error occurred while trying to parse json from slick: %s", err.Error())
+			return nil
+		}
+		return result
+	}
+	debug("Response code from slick when requesting result from queue: %d", resp.StatusCode)
+	return nil
+}
+
 func (agent *Agent) HandleGetTest() {
 	debug("Inside HandleGetTest, there are %d configs to process.", len(agent.Config.GetTest))
+	// first get the test from slick, then call everything else
+	query := make(map[string]interface{})
+	query["provides"] = agent.Status.getNonBrokenProvides()
+	for key, value := range agent.Status.RequiredTestAttributes {
+		query[key] = value
+	}
+
+	if len(agent.Status.Projects) > 0 {
+		for _, project := range agent.Status.Projects {
+			projectQuery := query
+			projectQuery["project"] = project.Name
+			if project.Release != "" {
+				projectQuery["release"] = project.Release
+			}
+			if project.Build != "" {
+				projectQuery["build"] = project.Build
+			}
+			agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(projectQuery)
+			if agent.Status.ResultToRun != nil {
+				break
+			}
+		}
+	} else {
+		 agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(query)
+	}
+
+	// TODO Handle the new go version of slick, when it's finished
+	for _, phase := range agent.Config.GetTest {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleRunTest() {
 	debug("Inside HandleRunTest, there are %d configs to process.  Current Test:\n%+v", len(agent.Config.RunTest), agent.Status.ResultToRun)
+	for _, phase := range agent.Config.RunTest {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleNoTest() {
 	debug("Inside HandleNoTest, there are %d configs to process.", len(agent.Config.NoTest))
+	for _, phase := range agent.Config.NoTest {
+		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
 }
 
 func (agent *Agent) HandleCleanup() {
