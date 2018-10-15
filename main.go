@@ -83,6 +83,7 @@ func main() {
 				agent.RanTest = true
 				agent.HandleRunTest()
 			} else {
+				agent.RanTest = false
 				agent.HandleNoTest()
 			}
 			agent.HandleStatusUpdate()
@@ -183,6 +184,12 @@ type PhaseConfiguration struct {
 type SleepConfiguration struct {
 	AfterTest string `yaml:"after-test,omitempty"`
 	NoTest string `yaml:"no-test,omitempty"`
+}
+
+type TestcaseInfo struct {
+	Id string
+	Name string
+	AutomationId string
 }
 
 func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
@@ -435,9 +442,15 @@ func (agent *Agent) HandleGetTest() {
 
 func (agent *Agent) HandleRunTest() {
 	debug("Inside HandleRunTest, there are %d configs to process.  Current Test:\n%+v", len(agent.Config.RunTest), agent.Status.ResultToRun)
+	log.Printf("Running result: %+v", GetTestInfo(agent.Status.ResultToRun))
 	for _, phase := range agent.Config.RunTest {
 		phase.ApplyToStatus(&agent.Status, nil, nil)
 	}
+	status := GetTestResult(agent.Status.ResultToRun)
+	if status == "" || status == "NO_RESULT" {
+		status = "UNKNOWN"
+	}
+	log.Printf("Result of test: %s", status)
 }
 
 func (agent *Agent) HandleNoTest() {
@@ -543,6 +556,35 @@ func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *st
 	}
 
 	return nil
+}
+
+func GetTestResult(test map[string]interface{}) string {
+	status, ok := test["status"]
+	if !ok {
+		return ""
+	}
+	result, ok := status.(string)
+	if !ok {
+		return ""
+	}
+	return result
+}
+
+func GetTestInfo(test map[string]interface{}) TestcaseInfo {
+	testcase, ok := test["testcase"]
+	if !ok {
+		return TestcaseInfo{}
+	}
+	testref, ok := testcase.(map[string]interface{})
+	if !ok {
+		return TestcaseInfo{}
+	}
+	retval := TestcaseInfo{
+		Id: test["id"].(string),
+		Name: testref["name"].(string),
+		AutomationId: testref["automationId"].(string),
+	}
+	return retval
 }
 
 func debug(format string, v ...interface{}) {
