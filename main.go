@@ -236,6 +236,9 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 	}
 
 	if err == nil {
+		if config.Slick.AgentName == "" {
+			config.Slick.AgentName, _ = os.Hostname()
+		}
 		d, err := time.ParseDuration(config.CheckForConfigurationEvery)
 		if err == nil {
 			parsed.CheckForConfigurationEvery = d
