@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
+	"github.com/slickqa/slick/slickqa"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
@@ -108,7 +113,7 @@ type AgentStatus struct {
 	Provides []string `json:"provides"`
 	BrokenProvides []string `json:"broken"`
 	RunStatus string `json:"runStatus"`
-	Projects []ProjectReleaseBuild `json:"projects,omitempty"`
+	Projects []*slickqa.ProjectReleaseBuildInfo //[]ProjectReleaseBuild `json:"projects,omitempty"`
 	Versions map[string]string `json:"versions,omitempty"`
 	Hardware string `json:"hardware,omitempty"`
 	RequiredTestAttributes map[string]string `json:"requiredAttrs,omitempty"`
@@ -130,6 +135,7 @@ type ProjectReleaseBuild struct {
 }
 
 type AgentConfiguration struct {
+	Company string `yaml:"company,omitempty"`
 	Projects []ProjectReleaseBuild `yaml:"projects,omitempty"`
 	LoopStart []PhaseConfiguration `yaml:"loop-start,omitempty"`
 	CheckForAction []PhaseConfiguration `yaml:"check-for-action,omitempty"`
@@ -168,6 +174,7 @@ type Agent struct {
 
 type SlickConfiguration struct {
 	BaseUrl string `yaml:"base-url"`
+	GrpcUrl string `yaml:"grpc-url"`
 	AgentName string `yaml:"agent-name"`
 }
 
@@ -267,9 +274,13 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 
 func (agent *Agent) DefaultStatus() AgentStatus {
 	groups := make([]string, len(ProgramOptions.Groups))
-	projects := make([]ProjectReleaseBuild, len(agent.Config.Projects))
+	projects := make([]*slickqa.ProjectReleaseBuildInfo, 0)
 	copy(groups, ProgramOptions.Groups)
-	copy(projects, agent.Config.Projects)
+	for _, p := range agent.Config.Projects {
+		projects = append(projects, &slickqa.ProjectReleaseBuildInfo{Project: p.Name,
+		Build: p.Build,
+		Release: p.Release})
+	}
 	return AgentStatus{
 		RunStatus: "IDLE",
 		RanTest: false,
@@ -336,10 +347,58 @@ func (agent *Agent) HandleBrokenDiscovery() {
 	}
 }
 
+type SlickAuth struct {
+	Token string
+	jwtToken string
+	expires time.Time
+}
+
+func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	if auth.jwtToken == "" || time.Now().After(auth.expires){
+		conn, err := grpc.Dial(uri[0], grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))  //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
+		if err != nil {
+			return nil, err
+		}
+		client := slickqa.NewAuthClient(conn)
+		resp, err := client.LoginWithToken(context.Background(), &slickqa.ApiTokenLoginRequest{Token: auth.Token}, nil)
+		if err != nil {
+			return nil, err
+		}
+		auth.jwtToken = resp.Token
+		auth.expires = time.Now().Add(time.Duration(10 * time.Minute))
+	}
+	headers := make(map[string]string)
+	headers["Authorization"] = "Bearer " + auth.jwtToken
+	return headers, nil
+}
+
+func (auth SlickAuth) RequireTransportSecurity() bool {
+	return true
+}
+
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 	for _, phase := range agent.Config.UpdateStatus {
 		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
+	// update slick
+	if agent.Config.Slick.GrpcUrl != "" {
+		//pool, err := x509.SystemCertPool()
+		conn, err := grpc.Dial(agent.Config.Slick.GrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: "yomamasofat"}),
+			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
+		if err != nil {
+			log.Printf("Error opening grpc connection %s", err)
+			return
+		}
+		defer conn.Close()
+		client := slickqa.NewAgentsClient(conn)
+		_, err = client.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
+			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
+			Status: &slickqa.AgentStatus{
+				Projects:  agent.Status.Projects,
+				RunStatus: agent.Status.RunStatus},
+		})
+		log.Printf("%+v", err)
 	}
 }
 
@@ -421,7 +480,7 @@ func (agent *Agent) HandleGetTest() {
 	if len(agent.Status.Projects) > 0 {
 		for _, project := range agent.Status.Projects {
 			projectQuery := query
-			projectQuery["project"] = project.Name
+			projectQuery["project"] = project.Project
 			if project.Release != "" {
 				projectQuery["release"] = project.Release
 			}
