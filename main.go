@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
+	"github.com/slickqa/slick/slickqa"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
@@ -81,6 +86,8 @@ func main() {
 			agent.HandleStatusUpdate()
 			if agent.Status.ResultToRun != nil {
 				agent.RanTest = true
+				agent.Status.RunStatus = "RUNNING"
+				agent.HandleStatusUpdate()
 				agent.HandleRunTest()
 			} else {
 				agent.RanTest = false
@@ -97,116 +104,118 @@ func main() {
 var (
 	ProgramOptions struct {
 		ConfigurationLocation string
-		Groups []string
-		Debug bool
-		ShellCommand string
-		ShellOpt string
+		Groups                []string
+		Debug                 bool
+		ShellCommand          string
+		ShellOpt              string
 	}
 )
 
 type AgentStatus struct {
-	Provides []string `json:"provides"`
-	BrokenProvides []string `json:"broken"`
-	RunStatus string `json:"runStatus"`
-	Projects []ProjectReleaseBuild `json:"projects,omitempty"`
-	Versions map[string]string `json:"versions,omitempty"`
-	Hardware string `json:"hardware,omitempty"`
-	RequiredTestAttributes map[string]string `json:"requiredAttrs,omitempty"`
-	RanTest bool `json:"ranTest"`
-	Action string `json:"action,omitempty"`
-	ActionParameter string `json:"actionParameter,omitempty"`
-	IP string `json:"IP,omitempty"`
-	Attributes map[string]string `json:"attributes"`
-	ResultToRun map[string]interface{} `json:"testcase"`
-	Groups []string `json:"groups"`
-	ShouldExit bool `json:"shouldExit"`
-	AgentName string `json:"agentName"`
+	Provides               []string                           `json:"provides"`
+	BrokenProvides         []string                           `json:"broken"`
+	RunStatus              string                             `json:"runStatus"`
+	Projects               []*slickqa.ProjectReleaseBuildInfo //[]ProjectReleaseBuild `json:"projects,omitempty"`
+	Versions               map[string]string                  `json:"versions,omitempty"`
+	Hardware               string                             `json:"hardware,omitempty"`
+	RequiredTestAttributes map[string]string                  `json:"requiredAttrs,omitempty"`
+	RanTest                bool                               `json:"ranTest"`
+	Action                 string                             `json:"action,omitempty"`
+	ActionParameter        string                             `json:"actionParameter,omitempty"`
+	IP                     string                             `json:"IP,omitempty"`
+	Attributes             map[string]string                  `json:"attributes"`
+	ResultToRun            map[string]interface{}             `json:"testcase"`
+	Groups                 []string                           `json:"groups"`
+	ShouldExit             bool                               `json:"shouldExit"`
+	AgentName              string                             `json:"agentName"`
 }
 
 type ProjectReleaseBuild struct {
-	Name string `json:"name" yaml:"name"`
+	Name    string `json:"name" yaml:"name"`
 	Release string `json:"release,omitempty" yaml:"release,omitempty"`
-	Build string `json:"build,omitempty" yaml:"build,omitempty"`
+	Build   string `json:"build,omitempty" yaml:"build,omitempty"`
 }
 
 type AgentConfiguration struct {
-	Projects []ProjectReleaseBuild `yaml:"projects,omitempty"`
-	LoopStart []PhaseConfiguration `yaml:"loop-start,omitempty"`
-	CheckForAction []PhaseConfiguration `yaml:"check-for-action,omitempty"`
-	Discovery []PhaseConfiguration `yaml:"discovery,omitempty"`
-	BrokenDiscovery []PhaseConfiguration `yaml:"broke-discovery,omitempty"`
-	GetStatus []PhaseConfiguration `yaml:"get-status,omitempty"`
-	UpdateStatus []PhaseConfiguration `yaml:"update-status,omitempty"`
-	RunTest []PhaseConfiguration `yaml:"run-test,omitempty"`
-	NoTest []PhaseConfiguration `yaml:"no-test,omitempty"`
-	Cleanup []PhaseConfiguration `yaml:"cleanup,omitempty"`
-	ActionMap map[string]PhaseConfiguration `yaml:"action-map,omitempty"`
-	BeforeGetTest []PhaseConfiguration `yaml:"before-get-test,omitempty"`
-	GetTest []PhaseConfiguration `yaml:"get-test,omitempty"`
-	Slick SlickConfiguration `yaml:"slick,omitempty"`
-	CheckForConfigurationEvery string `yaml:"check-for-configuration-every,omitempty"`
-	Sleep SleepConfiguration `yaml:"sleep,omitempty"`
+	Company                    string                        `yaml:"company,omitempty"`
+	Projects                   []ProjectReleaseBuild         `yaml:"projects,omitempty"`
+	LoopStart                  []PhaseConfiguration          `yaml:"loop-start,omitempty"`
+	CheckForAction             []PhaseConfiguration          `yaml:"check-for-action,omitempty"`
+	Discovery                  []PhaseConfiguration          `yaml:"discovery,omitempty"`
+	BrokenDiscovery            []PhaseConfiguration          `yaml:"broke-discovery,omitempty"`
+	GetStatus                  []PhaseConfiguration          `yaml:"get-status,omitempty"`
+	UpdateStatus               []PhaseConfiguration          `yaml:"update-status,omitempty"`
+	RunTest                    []PhaseConfiguration          `yaml:"run-test,omitempty"`
+	NoTest                     []PhaseConfiguration          `yaml:"no-test,omitempty"`
+	Cleanup                    []PhaseConfiguration          `yaml:"cleanup,omitempty"`
+	ActionMap                  map[string]PhaseConfiguration `yaml:"action-map,omitempty"`
+	BeforeGetTest              []PhaseConfiguration          `yaml:"before-get-test,omitempty"`
+	GetTest                    []PhaseConfiguration          `yaml:"get-test,omitempty"`
+	Slick                      SlickConfiguration            `yaml:"slick,omitempty"`
+	CheckForConfigurationEvery string                        `yaml:"check-for-configuration-every,omitempty"`
+	Sleep                      SleepConfiguration            `yaml:"sleep,omitempty"`
 }
 
 type ParsedConfigurationOptions struct {
-	Sleep ParsedSleepOptions
+	Sleep                      ParsedSleepOptions
 	CheckForConfigurationEvery time.Duration
 }
 
 type ParsedSleepOptions struct {
 	AfterTest time.Duration
-	NoTest time.Duration
+	NoTest    time.Duration
 }
 
 type Agent struct {
-	Config AgentConfiguration
-	Status AgentStatus
+	Config                 AgentConfiguration
+	Status                 AgentStatus
 	LastConfigurationCheck time.Time
-	RanTest bool
-	Cache ParsedConfigurationOptions
+	RanTest                bool
+	Cache                  ParsedConfigurationOptions
 }
 
 type SlickConfiguration struct {
-	BaseUrl string `yaml:"base-url"`
+	BaseUrl   string `yaml:"base-url"`
+	GrpcUrl   string `yaml:"grpc-url"`
 	AgentName string `yaml:"agent-name"`
 }
 
 type PhaseConfiguration struct {
-	HttpUrl string `yaml:"http-url,omitempty"`
-	Command string `yaml:"command,omitempty"`
-	WriteFile string `yaml:"write-file,omitempty"`
-	ReadFile string `yaml:"read-file,omitempty"`
-	StaticList []string `yaml:"static-list,omitempty,flow"`
-	StaticMap map[string]string `yaml:"static-map,omitempty"`
-	StaticValue string `yaml:"static-value,omitempty"`
+	HttpUrl     string            `yaml:"http-url,omitempty"`
+	Command     string            `yaml:"command,omitempty"`
+	WriteFile   string            `yaml:"write-file,omitempty"`
+	ReadFile    string            `yaml:"read-file,omitempty"`
+	StaticList  []string          `yaml:"static-list,omitempty,flow"`
+	StaticMap   map[string]string `yaml:"static-map,omitempty"`
+	StaticValue string            `yaml:"static-value,omitempty"`
 }
 
 type SleepConfiguration struct {
 	AfterTest string `yaml:"after-test,omitempty"`
-	NoTest string `yaml:"no-test,omitempty"`
+	NoTest    string `yaml:"no-test,omitempty"`
 }
 
 type TestcaseInfo struct {
-	Id string
-	Name string
+	Id           string
+	Name         string
 	AutomationId string
 }
 
 func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
 	return AgentConfiguration{
-		CheckForConfigurationEvery: "5s",
-		Sleep: SleepConfiguration{
-			AfterTest: "500ms",
-			NoTest: "2s",
-		},
-		Slick: SlickConfiguration{},
-	}, ParsedConfigurationOptions{
-		CheckForConfigurationEvery: 5 * time.Second,
-		Sleep: ParsedSleepOptions{
-			AfterTest: 500 * time.Millisecond,
-			NoTest: 2 * time.Second,
-		},
-	}
+			CheckForConfigurationEvery: "5s",
+			Sleep: SleepConfiguration{
+				AfterTest: "500ms",
+				NoTest:    "2s",
+			},
+			Slick: SlickConfiguration{},
+		}, ParsedConfigurationOptions{
+			CheckForConfigurationEvery: 5 * time.Second,
+			Sleep: ParsedSleepOptions{
+				AfterTest: 500 * time.Millisecond,
+				NoTest:    2 * time.Second,
+			},
+		}
 }
 
 func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error) {
@@ -267,18 +276,22 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 
 func (agent *Agent) DefaultStatus() AgentStatus {
 	groups := make([]string, len(ProgramOptions.Groups))
-	projects := make([]ProjectReleaseBuild, len(agent.Config.Projects))
+	projects := make([]*slickqa.ProjectReleaseBuildInfo, 0)
 	copy(groups, ProgramOptions.Groups)
-	copy(projects, agent.Config.Projects)
+	for _, p := range agent.Config.Projects {
+		projects = append(projects, &slickqa.ProjectReleaseBuildInfo{Project: p.Name,
+			Build:   p.Build,
+			Release: p.Release})
+	}
 	return AgentStatus{
-		RunStatus: "IDLE",
-		RanTest: false,
-		Groups: groups,
-		Provides: make([]string, 0),
+		RunStatus:      "IDLE",
+		RanTest:        false,
+		Groups:         groups,
+		Provides:       make([]string, 0),
 		BrokenProvides: make([]string, 0),
-		Attributes: make(map[string]string),
-		Projects: projects,
-		AgentName: agent.Config.Slick.AgentName,
+		Attributes:     make(map[string]string),
+		Projects:       projects,
+		AgentName:      agent.Config.Slick.AgentName,
 	}
 }
 
@@ -336,10 +349,59 @@ func (agent *Agent) HandleBrokenDiscovery() {
 	}
 }
 
+type SlickAuth struct {
+	Token    string
+	jwtToken string
+	expires  time.Time
+}
+
+func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	if auth.jwtToken == "" || time.Now().After(auth.expires) {
+		log.Printf("Url[0]: %s", uri[0])
+		conn, err := grpc.Dial("slick.sofitest.com:443", grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: "slick.sofitest.com", InsecureSkipVerify: true}))) //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
+		if err != nil {
+			return nil, err
+		}
+		client := slickqa.NewAuthClient(conn)
+		resp, err := client.LoginWithToken(context.Background(), &slickqa.ApiTokenLoginRequest{Token: auth.Token})
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("JwtToken: %s", resp.Token)
+		auth.jwtToken = resp.Token
+		auth.expires = time.Now().Add(time.Duration(10 * time.Minute))
+	}
+	headers := make(map[string]string)
+	headers["Authorization"] = "Bearer " + auth.jwtToken
+	return headers, nil
+}
+
+func (auth SlickAuth) RequireTransportSecurity() bool {
+	return true
+}
+
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 	for _, phase := range agent.Config.UpdateStatus {
 		phase.ApplyToStatus(&agent.Status, nil, nil)
+	}
+	// update slick
+	if agent.Config.Slick.GrpcUrl != "" {
+		conn, err := grpc.Dial(agent.Config.Slick.GrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: "yomamasofat"}),
+			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: agent.Config.Slick.GrpcUrl, InsecureSkipVerify: true})))
+		if err != nil {
+			log.Printf("Error opening grpc connection %s", err)
+			return
+		}
+		defer conn.Close()
+		client := slickqa.NewAgentsClient(conn)
+		_, err = client.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
+			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
+			Status: &slickqa.AgentStatus{
+				Projects:  agent.Status.Projects,
+				RunStatus: agent.Status.RunStatus},
+		})
+		log.Printf("%+v", err)
 	}
 }
 
@@ -421,7 +483,7 @@ func (agent *Agent) HandleGetTest() {
 	if len(agent.Status.Projects) > 0 {
 		for _, project := range agent.Status.Projects {
 			projectQuery := query
-			projectQuery["project"] = project.Name
+			projectQuery["project"] = project.Project
 			if project.Release != "" {
 				projectQuery["release"] = project.Release
 			}
@@ -434,7 +496,7 @@ func (agent *Agent) HandleGetTest() {
 			}
 		}
 	} else {
-		 agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(query)
+		agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(query)
 	}
 
 	// TODO Handle the new go version of slick, when it's finished
@@ -583,8 +645,8 @@ func GetTestInfo(test map[string]interface{}) TestcaseInfo {
 		return TestcaseInfo{}
 	}
 	retval := TestcaseInfo{
-		Id: test["id"].(string),
-		Name: testref["name"].(string),
+		Id:           test["id"].(string),
+		Name:         testref["name"].(string),
 		AutomationId: testref["automationId"].(string),
 	}
 	return retval
