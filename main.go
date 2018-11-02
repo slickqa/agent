@@ -388,7 +388,7 @@ func (agent *Agent) HandleStatusUpdate() {
 	// update slick
 	if agent.Config.Slick.GrpcUrl != "" {
 		conn, err := grpc.Dial(agent.Config.Slick.GrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: "yomamasofat"}),
-			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: "slick.sofitest.com", InsecureSkipVerify: true})))
+			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: agent.Config.Slick.GrpcUrl, InsecureSkipVerify: true})))
 		if err != nil {
 			log.Printf("Error opening grpc connection %s", err)
 			return
