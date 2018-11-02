@@ -355,15 +355,17 @@ type SlickAuth struct {
 
 func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
 	if auth.jwtToken == "" || time.Now().After(auth.expires){
-		conn, err := grpc.Dial(uri[0], grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))  //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
+		log.Printf("Url[0]: %s", uri[0])
+		conn, err := grpc.Dial("slick.sofitest.com:443", grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: "slick.sofitest.com", InsecureSkipVerify: true})))  //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
 		if err != nil {
 			return nil, err
 		}
 		client := slickqa.NewAuthClient(conn)
-		resp, err := client.LoginWithToken(context.Background(), &slickqa.ApiTokenLoginRequest{Token: auth.Token}, nil)
+		resp, err := client.LoginWithToken(context.Background(), &slickqa.ApiTokenLoginRequest{Token: auth.Token})
 		if err != nil {
 			return nil, err
 		}
+		log.Printf("JwtToken: %s", resp.Token)
 		auth.jwtToken = resp.Token
 		auth.expires = time.Now().Add(time.Duration(10 * time.Minute))
 	}
@@ -385,7 +387,7 @@ func (agent *Agent) HandleStatusUpdate() {
 	if agent.Config.Slick.GrpcUrl != "" {
 		//pool, err := x509.SystemCertPool()
 		conn, err := grpc.Dial(agent.Config.Slick.GrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: "yomamasofat"}),
-			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
+			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName:"slick.sofitest.com", InsecureSkipVerify: true})))
 		if err != nil {
 			log.Printf("Error opening grpc connection %s", err)
 			return
