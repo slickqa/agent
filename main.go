@@ -2,15 +2,13 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
+	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"gopkg.in/yaml.v2"
 	"io/ioutil"
 	"log"
@@ -349,37 +347,6 @@ func (agent *Agent) HandleBrokenDiscovery() {
 	}
 }
 
-type SlickAuth struct {
-	Token    string
-	jwtToken string
-	expires  time.Time
-}
-
-func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	if auth.jwtToken == "" || time.Now().After(auth.expires) {
-		log.Printf("Url[0]: %s", uri[0])
-		conn, err := grpc.Dial("slick.sofitest.com:443", grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: "slick.sofitest.com", InsecureSkipVerify: true}))) //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
-		if err != nil {
-			return nil, err
-		}
-		client := slickqa.NewAuthClient(conn)
-		resp, err := client.LoginWithToken(context.Background(), &slickqa.ApiTokenLoginRequest{Token: auth.Token})
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("JwtToken: %s", resp.Token)
-		auth.jwtToken = resp.Token
-		auth.expires = time.Now().Add(time.Duration(10 * time.Minute))
-	}
-	headers := make(map[string]string)
-	headers["Authorization"] = "Bearer " + auth.jwtToken
-	return headers, nil
-}
-
-func (auth SlickAuth) RequireTransportSecurity() bool {
-	return true
-}
-
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 	for _, phase := range agent.Config.UpdateStatus {
@@ -387,21 +354,13 @@ func (agent *Agent) HandleStatusUpdate() {
 	}
 	// update slick
 	if agent.Config.Slick.GrpcUrl != "" {
-		conn, err := grpc.Dial(agent.Config.Slick.GrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: "yomamasofat"}),
-			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: agent.Config.Slick.GrpcUrl, InsecureSkipVerify: true})))
-		if err != nil {
-			log.Printf("Error opening grpc connection %s", err)
-			return
-		}
-		defer conn.Close()
-		client := slickqa.NewAgentsClient(conn)
-		_, err = client.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
+		client := slickClient.GetSlickClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
+		client.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
 			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
 			Status: &slickqa.AgentStatus{
 				Projects:  agent.Status.Projects,
 				RunStatus: agent.Status.RunStatus},
 		})
-		log.Printf("%+v", err)
 	}
 }
 
