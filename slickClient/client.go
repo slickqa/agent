@@ -13,18 +13,21 @@ import (
 var (
 	slickAgentClient slickqa.AgentsClient
 	slickGrpc        string
+	currentAuth      SlickAuth
 )
 
 type SlickAuth struct {
 	Token    string
 	jwtToken string
 	expires  time.Time
+	headers  map[string]string
 }
 
 func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	if auth.jwtToken == "" || time.Now().After(auth.expires) {
+	if currentAuth.jwtToken == "" || time.Now().After(currentAuth.expires) {
 		log.Printf("Url[0]: %s", uri[0])
-		conn, err := grpc.Dial(slickGrpc, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: "slick.sofitest.com", InsecureSkipVerify: true}))) //grpc.WithInsecure()) //WithTransportCredentials(credentials.NewTLS(nil)))
+		conn, err := grpc.Dial(slickGrpc, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			ServerName: "slick.sofitest.com", InsecureSkipVerify: true})))
 		if err != nil {
 			return nil, err
 		}
@@ -34,12 +37,13 @@ func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (ma
 			return nil, err
 		}
 		log.Printf("JwtToken: %s", resp.Token)
-		auth.jwtToken = resp.Token
-		auth.expires = time.Now().Add(time.Duration(10 * time.Minute))
+		currentAuth.jwtToken = resp.Token
+		currentAuth.expires = time.Now().Add(time.Duration(10 * time.Minute))
+		headers := make(map[string]string)
+		headers["Authorization"] = "Bearer " + auth.jwtToken
+		currentAuth.headers = headers
 	}
-	headers := make(map[string]string)
-	headers["Authorization"] = "Bearer " + auth.jwtToken
-	return headers, nil
+	return currentAuth.headers, nil
 }
 
 func (auth SlickAuth) RequireTransportSecurity() bool {
