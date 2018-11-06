@@ -54,7 +54,6 @@ func GetSlickClient(slickGrpcUrl string, token string) slickqa.AgentsClient {
 	if slickAgentClient == nil {
 		slickGrpc = slickGrpcUrl
 		log.Printf("Authenticating with slick for the first time.")
-		//TODO: create and track my SlickAuth so it doesn't re-authenticate every time
 		conn, err := grpc.Dial(slickGrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: token}),
 			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: slickGrpcUrl, InsecureSkipVerify: true})))
 		if err != nil {
