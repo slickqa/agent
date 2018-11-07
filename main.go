@@ -1,12 +1,12 @@
 package main
 
 import (
-	"./slickClient"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
+	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
@@ -80,6 +80,7 @@ func main() {
 		if agent.Status.Action != "" {
 			agent.HandlePerformAction()
 		}
+		agent.HandleDiscoverTestAttributes()
 		agent.HandleDiscovery()
 		agent.HandleStatusUpdate()
 		agent.HandleBrokenDiscovery()
@@ -147,6 +148,7 @@ type AgentConfiguration struct {
 	Projects                   []ProjectReleaseBuild         `yaml:"projects,omitempty"`
 	LoopStart                  []PhaseConfiguration          `yaml:"loop-start,omitempty"`
 	CheckForAction             []PhaseConfiguration          `yaml:"check-for-action,omitempty"`
+	TestAttributeDiscovery     []PhaseConfiguration          `yaml:"test-attribute-discovery,omitempty"`
 	Discovery                  []PhaseConfiguration          `yaml:"discovery,omitempty"`
 	BrokenDiscovery            []PhaseConfiguration          `yaml:"broke-discovery,omitempty"`
 	GetStatus                  []PhaseConfiguration          `yaml:"get-status,omitempty"`
@@ -297,6 +299,7 @@ func (agent *Agent) DefaultStatus() AgentStatus {
 		Provides:       make([]string, 0),
 		BrokenProvides: make([]string, 0),
 		Attributes:     make(map[string]string),
+		RequiredTestAttributes: make(map[string]string),
 		Projects:       projects,
 		AgentName:      agent.Config.Slick.AgentName,
 	}
@@ -319,14 +322,14 @@ func (agent *Agent) CheckConfiguration() {
 func (agent *Agent) HandleLoopStart() {
 	debug("Inside HandleLoopStart, there are %d configs to process.", len(agent.Config.LoopStart))
 	for _, phase := range agent.Config.LoopStart {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleCheckForAction() {
 	debug("Inside HandleCheckForAction, there are %d configs to process.", len(agent.Config.CheckForAction))
 	for _, phase := range agent.Config.CheckForAction {
-		phase.ApplyToStatus(&agent.Status, &agent.Status.Action, nil)
+		phase.ApplyToStatus(&agent.Status, &agent.Status.Action, nil, nil)
 	}
 }
 
@@ -337,29 +340,36 @@ func (agent *Agent) HandlePerformAction() {
 		log.Printf("Unable to find action %#v in action map %+v from configuration value action-map from %s", agent.Status.Action, agent.Config.ActionMap, ProgramOptions.ConfigurationLocation)
 		return
 	}
-	config.ApplyToStatus(&agent.Status, nil, nil)
+	config.ApplyToStatus(&agent.Status, nil, nil, nil)
 
 	// TODO handler for successful and unsuccessful action
+}
+
+func (agent *Agent) HandleDiscoverTestAttributes() {
+	debug("Inside HandleDiscoverTestAttributes, there are %d configs to process.", len(agent.Config.TestAttributeDiscovery))
+	for _, phase := range agent.Config.TestAttributeDiscovery {
+		phase.ApplyToStatus(&agent.Status, nil, nil, &agent.Status.RequiredTestAttributes)
+	}
 }
 
 func (agent *Agent) HandleDiscovery() {
 	debug("Inside HandleDiscovery, there are %d configs to process.", len(agent.Config.Discovery))
 	for _, phase := range agent.Config.Discovery {
-		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.Provides)
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.Provides, nil)
 	}
 }
 
 func (agent *Agent) HandleBrokenDiscovery() {
 	debug("Inside HandleBrokenDiscovery, there are %d configs to process.", len(agent.Config.BrokenDiscovery))
 	for _, phase := range agent.Config.BrokenDiscovery {
-		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.BrokenProvides)
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.BrokenProvides, nil)
 	}
 }
 
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 	for _, phase := range agent.Config.UpdateStatus {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 	// update slick
 	if agent.Slick != nil {
@@ -387,14 +397,14 @@ func (agent *Agent) HandleStatusUpdate() {
 func (agent *Agent) HandleGetCurrentStatus() {
 	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
 	for _, phase := range agent.Config.GetStatus {
-		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil)
+		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleBeforeGetTest() {
 	debug("Inside HandleBeforeGetTest, there are %d configs to process.", len(agent.Config.BeforeGetTest))
 	for _, phase := range agent.Config.BeforeGetTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -480,7 +490,7 @@ func (agent *Agent) HandleGetTest() {
 
 	// TODO Handle the new go version of slick, when it's finished
 	for _, phase := range agent.Config.GetTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -488,7 +498,7 @@ func (agent *Agent) HandleRunTest() {
 	debug("Inside HandleRunTest, there are %d configs to process.  Current Test:\n%+v", len(agent.Config.RunTest), agent.Status.ResultToRun)
 	log.Printf("Running result: %+v", GetTestInfo(agent.Status.ResultToRun))
 	for _, phase := range agent.Config.RunTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 	status := GetTestResult(agent.Status.ResultToRun)
 	if status == "" || status == "NO_RESULT" {
@@ -500,14 +510,14 @@ func (agent *Agent) HandleRunTest() {
 func (agent *Agent) HandleNoTest() {
 	debug("Inside HandleNoTest, there are %d configs to process.", len(agent.Config.NoTest))
 	for _, phase := range agent.Config.NoTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleCleanup() {
 	debug("Inside HandleCleanup, there are %d configs to process.", len(agent.Config.Cleanup))
 	for _, phase := range agent.Config.Cleanup {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -521,7 +531,7 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
-func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string) error {
+func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string, staticMap *map[string]string) error {
 	if conf.Command != "" {
 		tmpfile, err := ioutil.TempFile("", "slick-agent-status-*.yml")
 		tmpFilename := tmpfile.Name()
@@ -596,7 +606,10 @@ func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *st
 			log.Printf("Attempted to set static list %+v but that is invalid during this phase, ignoring.", conf.StaticList)
 			return fmt.Errorf("nil staticArray, can't set value %#v during this phase", conf.StaticList)
 		}
-	} else if len(conf.StaticMap) > 0 {
+	} else if len(conf.StaticMap) > 0 && staticMap != nil {
+		for k, v := range conf.StaticMap {
+			(*staticMap)[k] = v
+		}
 	}
 
 	return nil
