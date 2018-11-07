@@ -36,11 +36,11 @@ func (auth SlickAuth) GetRequestMetadata(ctx context.Context, uri ...string) (ma
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("JwtToken: %s", resp.Token)
+		log.Printf("Got new JwtToken: %s", resp.Token)
 		currentAuth.jwtToken = resp.Token
 		currentAuth.expires = time.Now().Add(time.Duration(10 * time.Minute))
 		headers := make(map[string]string)
-		headers["Authorization"] = "Bearer " + auth.jwtToken
+		headers["Authorization"] = "Bearer " + currentAuth.jwtToken
 		currentAuth.headers = headers
 	}
 	return currentAuth.headers, nil
@@ -53,7 +53,7 @@ func (auth SlickAuth) RequireTransportSecurity() bool {
 func GetSlickClient(slickGrpcUrl string, token string) slickqa.AgentsClient {
 	if slickAgentClient == nil {
 		slickGrpc = slickGrpcUrl
-		log.Printf("Authenticating with slick for the first time.")
+		log.Printf("Connecting to slick at:" + slickGrpcUrl)
 		conn, err := grpc.Dial(slickGrpcUrl, grpc.WithPerRPCCredentials(SlickAuth{Token: token}),
 			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{ServerName: slickGrpcUrl, InsecureSkipVerify: true})))
 		if err != nil {
