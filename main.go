@@ -1,12 +1,12 @@
 package main
 
 import (
+	"./slickClient"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
-	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
