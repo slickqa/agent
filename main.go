@@ -59,6 +59,14 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading configuration: %s", err.Error())
 	}
+
+	if agent.Config.Slick.GrpcUrl != "" {
+		//TODO: get token dynamically
+		agent.Slick, err = slickClient.CreateClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
+		if err != nil {
+			log.Printf("Error creating slick client: %s", err)
+		}
+	}
 	agent.LastConfigurationCheck = time.Now()
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
@@ -170,6 +178,7 @@ type Agent struct {
 	LastConfigurationCheck time.Time
 	RanTest                bool
 	Cache                  ParsedConfigurationOptions
+	Slick                  *slickClient.SlickClient
 }
 
 type SlickConfiguration struct {
@@ -353,14 +362,24 @@ func (agent *Agent) HandleStatusUpdate() {
 		phase.ApplyToStatus(&agent.Status, nil, nil)
 	}
 	// update slick
-	if agent.Config.Slick.GrpcUrl != "" {
-		client := slickClient.GetSlickClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
-		client.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
+	if agent.Slick != nil {
+		_, err := agent.Slick.Agents.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
 			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
 			Status: &slickqa.AgentStatus{
 				Projects:  agent.Status.Projects,
 				RunStatus: agent.Status.RunStatus},
 		})
+		if err != nil {
+			// re-connect?
+			agent.Slick.Close()
+			//TODO: get token dynamically
+			slickClient, err := slickClient.CreateClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
+			if err != nil {
+				log.Printf("Error re-connecting to slick: %s", err)
+			} else {
+				agent.Slick = slickClient
+			}
+		}
 	}
 }
 
