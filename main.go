@@ -372,6 +372,7 @@ func (agent *Agent) HandleStatusUpdate() {
 		if err != nil {
 			// re-connect?
 			agent.Slick.Close()
+			log.Printf("Trying to re-connect to slick")
 			//TODO: get token dynamically
 			slickClient, err := slickClient.CreateClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
 			if err != nil {
