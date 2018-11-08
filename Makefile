@@ -6,4 +6,5 @@ clean:
 	rm -rf build
 
 deps:
-	echo "put go get crap here"
+	go get -u github.com/slickqa/slick
+	go get -u github.com/minio/minio-go

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/minio/minio-go"
 	"github.com/namsral/flag"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
@@ -67,6 +68,18 @@ func main() {
 			log.Printf("Error creating slick client: %s", err)
 		}
 	}
+
+	// Configure S3 Storage
+	//TODO: add command line argument to turn on
+	var s3Options = S3CompatibleStorageOptions{
+		Endpoint:        os.Getenv("S3ENDPOINT"),
+		AccessKeyID:     "leeard",
+		SecretAccessKey: os.Getenv("S3SECRETKEY"),
+		BucketName:      "slickAgentScreenshots",
+		Location:        "utah-higg-trailer",
+	}
+	agent.S3Storage = s3Options
+
 	agent.LastConfigurationCheck = time.Now()
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
@@ -174,8 +187,17 @@ type ParsedSleepOptions struct {
 	NoTest    time.Duration
 }
 
+type S3CompatibleStorageOptions struct {
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	BucketName      string
+	Location        string
+}
+
 type Agent struct {
 	Config                 AgentConfiguration
+	S3Storage              S3CompatibleStorageOptions
 	Status                 AgentStatus
 	LastConfigurationCheck time.Time
 	RanTest                bool
@@ -208,6 +230,7 @@ type TestcaseInfo struct {
 	Id           string
 	Name         string
 	AutomationId string
+	TestrunId    string
 }
 
 func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
@@ -293,15 +316,15 @@ func (agent *Agent) DefaultStatus() AgentStatus {
 			Release: p.Release})
 	}
 	return AgentStatus{
-		RunStatus:      "IDLE",
-		RanTest:        false,
-		Groups:         groups,
-		Provides:       make([]string, 0),
-		BrokenProvides: make([]string, 0),
-		Attributes:     make(map[string]string),
+		RunStatus:              "IDLE",
+		RanTest:                false,
+		Groups:                 groups,
+		Provides:               make([]string, 0),
+		BrokenProvides:         make([]string, 0),
+		Attributes:             make(map[string]string),
 		RequiredTestAttributes: make(map[string]string),
-		Projects:       projects,
-		AgentName:      agent.Config.Slick.AgentName,
+		Projects:               projects,
+		AgentName:              agent.Config.Slick.AgentName,
 	}
 }
 
@@ -373,11 +396,24 @@ func (agent *Agent) HandleStatusUpdate() {
 	}
 	// update slick
 	if agent.Slick != nil {
+		var currentTest slickqa.AgentCurrentTest
+		if agent.Status.ResultToRun != nil {
+			testInfo := GetTestInfo(agent.Status.ResultToRun)
+			testUrl := agent.Config.Slick.BaseUrl + "/testruns/" + testInfo.TestrunId + "?result=" + testInfo.Id
+			currentTest = slickqa.AgentCurrentTest{
+				Name:         testInfo.Name,
+				AutomationId: testInfo.AutomationId,
+				Url:          testUrl,
+			}
+
+		}
 		_, err := agent.Slick.Agents.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
 			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
 			Status: &slickqa.AgentStatus{
-				Projects:  agent.Status.Projects,
-				RunStatus: agent.Status.RunStatus},
+				Projects:    agent.Status.Projects,
+				RunStatus:   agent.Status.RunStatus,
+				CurrentTest: &currentTest,
+			},
 		})
 		if err != nil {
 			// re-connect?
@@ -531,6 +567,43 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
+func (agent *Agent) startScreenShots(endpoint string, accessKeyID string, secretAccessKey string, bucketName string, location string) {
+	useSSL := true
+
+	// Initialize minio client object.
+	minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// Make the bucket
+
+	exists, err := minioClient.BucketExists(bucketName)
+	if err != nil {
+		log.Printf("error when checking if bucket %s exists\n", bucketName)
+	}
+	if !exists {
+		err = minioClient.MakeBucket(bucketName, location)
+		if err != nil {
+			log.Printf("error creating bucket %s\n", err)
+		} else {
+			log.Printf("Successfully created %s\n", bucketName)
+		}
+	}
+
+	// Upload the screenshot
+	objectName := "slick-agen.tar.gz"
+	filePath := "slick-agent.tar.gz"
+	contentType := "application/x-gzip"
+
+	// Upload the zip file with FPutObject
+	n, err := minioClient.FPutObject(bucketName, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		log.Printf("error uploading screenshot %s\n", err)
+	}
+
+	log.Printf("Successfully uploaded %s of size %d\n", objectName, n)
+}
+
 func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string, staticMap *map[string]string) error {
 	if conf.Command != "" {
 		tmpfile, err := ioutil.TempFile("", "slick-agent-status-*.yml")
@@ -628,6 +701,7 @@ func GetTestResult(test map[string]interface{}) string {
 }
 
 func GetTestInfo(test map[string]interface{}) TestcaseInfo {
+	var retval TestcaseInfo
 	testcase, ok := test["testcase"]
 	if !ok {
 		return TestcaseInfo{}
@@ -636,10 +710,24 @@ func GetTestInfo(test map[string]interface{}) TestcaseInfo {
 	if !ok {
 		return TestcaseInfo{}
 	}
-	retval := TestcaseInfo{
-		Id:           test["id"].(string),
-		Name:         testref["name"].(string),
-		AutomationId: testref["automationId"].(string),
+	testrun, ok := test["testrun"]
+	if !ok {
+		return TestcaseInfo{}
+	}
+	testrunRef, ok := testrun.(map[string]interface{})
+	if !ok {
+		retval = TestcaseInfo{
+			Id:           test["id"].(string),
+			Name:         testref["name"].(string),
+			AutomationId: testref["automationId"].(string),
+		}
+	} else {
+		retval = TestcaseInfo{
+			Id:           test["id"].(string),
+			Name:         testref["name"].(string),
+			AutomationId: testref["automationId"].(string),
+			TestrunId:    testrunRef["testrunId"].(string),
+		}
 	}
 	return retval
 }
