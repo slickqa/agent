@@ -1,12 +1,13 @@
 package main
 
 import (
-	"./slickClient"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/minio/minio-go"
 	"github.com/namsral/flag"
+	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
@@ -67,6 +68,18 @@ func main() {
 			log.Printf("Error creating slick client: %s", err)
 		}
 	}
+
+	// Configure S3 Storage
+	//TODO: add command line argument to turn on
+	var s3Options = S3CompatibleStorageOptions{
+		Endpoint:        os.Getenv("S3ENDPOINT"),
+		AccessKeyID:     "leeard",
+		SecretAccessKey: os.Getenv("S3SECRETKEY"),
+		BucketName:      "slickAgentScreenshots",
+		Location:        "utah-higg-trailer",
+	}
+	agent.S3Storage = s3Options
+
 	agent.LastConfigurationCheck = time.Now()
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
@@ -80,6 +93,7 @@ func main() {
 		if agent.Status.Action != "" {
 			agent.HandlePerformAction()
 		}
+		agent.HandleDiscoverTestAttributes()
 		agent.HandleDiscovery()
 		agent.HandleStatusUpdate()
 		agent.HandleBrokenDiscovery()
@@ -147,6 +161,7 @@ type AgentConfiguration struct {
 	Projects                   []ProjectReleaseBuild         `yaml:"projects,omitempty"`
 	LoopStart                  []PhaseConfiguration          `yaml:"loop-start,omitempty"`
 	CheckForAction             []PhaseConfiguration          `yaml:"check-for-action,omitempty"`
+	TestAttributeDiscovery     []PhaseConfiguration          `yaml:"test-attribute-discovery,omitempty"`
 	Discovery                  []PhaseConfiguration          `yaml:"discovery,omitempty"`
 	BrokenDiscovery            []PhaseConfiguration          `yaml:"broke-discovery,omitempty"`
 	GetStatus                  []PhaseConfiguration          `yaml:"get-status,omitempty"`
@@ -172,8 +187,17 @@ type ParsedSleepOptions struct {
 	NoTest    time.Duration
 }
 
+type S3CompatibleStorageOptions struct {
+	Endpoint        string
+	AccessKeyID     string
+	SecretAccessKey string
+	BucketName      string
+	Location        string
+}
+
 type Agent struct {
 	Config                 AgentConfiguration
+	S3Storage              S3CompatibleStorageOptions
 	Status                 AgentStatus
 	LastConfigurationCheck time.Time
 	RanTest                bool
@@ -206,6 +230,7 @@ type TestcaseInfo struct {
 	Id           string
 	Name         string
 	AutomationId string
+	TestrunId    string
 }
 
 func DefaultConfiguration() (AgentConfiguration, ParsedConfigurationOptions) {
@@ -291,14 +316,15 @@ func (agent *Agent) DefaultStatus() AgentStatus {
 			Release: p.Release})
 	}
 	return AgentStatus{
-		RunStatus:      "IDLE",
-		RanTest:        false,
-		Groups:         groups,
-		Provides:       make([]string, 0),
-		BrokenProvides: make([]string, 0),
-		Attributes:     make(map[string]string),
-		Projects:       projects,
-		AgentName:      agent.Config.Slick.AgentName,
+		RunStatus:              "IDLE",
+		RanTest:                false,
+		Groups:                 groups,
+		Provides:               make([]string, 0),
+		BrokenProvides:         make([]string, 0),
+		Attributes:             make(map[string]string),
+		RequiredTestAttributes: make(map[string]string),
+		Projects:               projects,
+		AgentName:              agent.Config.Slick.AgentName,
 	}
 }
 
@@ -319,14 +345,14 @@ func (agent *Agent) CheckConfiguration() {
 func (agent *Agent) HandleLoopStart() {
 	debug("Inside HandleLoopStart, there are %d configs to process.", len(agent.Config.LoopStart))
 	for _, phase := range agent.Config.LoopStart {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleCheckForAction() {
 	debug("Inside HandleCheckForAction, there are %d configs to process.", len(agent.Config.CheckForAction))
 	for _, phase := range agent.Config.CheckForAction {
-		phase.ApplyToStatus(&agent.Status, &agent.Status.Action, nil)
+		phase.ApplyToStatus(&agent.Status, &agent.Status.Action, nil, nil)
 	}
 }
 
@@ -337,37 +363,57 @@ func (agent *Agent) HandlePerformAction() {
 		log.Printf("Unable to find action %#v in action map %+v from configuration value action-map from %s", agent.Status.Action, agent.Config.ActionMap, ProgramOptions.ConfigurationLocation)
 		return
 	}
-	config.ApplyToStatus(&agent.Status, nil, nil)
+	config.ApplyToStatus(&agent.Status, nil, nil, nil)
 
 	// TODO handler for successful and unsuccessful action
+}
+
+func (agent *Agent) HandleDiscoverTestAttributes() {
+	debug("Inside HandleDiscoverTestAttributes, there are %d configs to process.", len(agent.Config.TestAttributeDiscovery))
+	for _, phase := range agent.Config.TestAttributeDiscovery {
+		phase.ApplyToStatus(&agent.Status, nil, nil, &agent.Status.RequiredTestAttributes)
+	}
 }
 
 func (agent *Agent) HandleDiscovery() {
 	debug("Inside HandleDiscovery, there are %d configs to process.", len(agent.Config.Discovery))
 	for _, phase := range agent.Config.Discovery {
-		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.Provides)
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.Provides, nil)
 	}
 }
 
 func (agent *Agent) HandleBrokenDiscovery() {
 	debug("Inside HandleBrokenDiscovery, there are %d configs to process.", len(agent.Config.BrokenDiscovery))
 	for _, phase := range agent.Config.BrokenDiscovery {
-		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.BrokenProvides)
+		phase.ApplyToStatus(&agent.Status, nil, &agent.Status.BrokenProvides, nil)
 	}
 }
 
 func (agent *Agent) HandleStatusUpdate() {
 	debug("Inside HandleStatusUpdate, there are %d configs to process.", len(agent.Config.UpdateStatus))
 	for _, phase := range agent.Config.UpdateStatus {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 	// update slick
 	if agent.Slick != nil {
+		var currentTest slickqa.AgentCurrentTest
+		if agent.Status.ResultToRun != nil {
+			testInfo := GetTestInfo(agent.Status.ResultToRun)
+			testUrl := agent.Config.Slick.BaseUrl + "/testruns/" + testInfo.TestrunId + "?result=" + testInfo.Id
+			currentTest = slickqa.AgentCurrentTest{
+				Name:         testInfo.Name,
+				AutomationId: testInfo.AutomationId,
+				Url:          testUrl,
+			}
+
+		}
 		_, err := agent.Slick.Agents.UpdateStatus(context.Background(), &slickqa.AgentStatusUpdate{
 			Id: &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Status.AgentName},
 			Status: &slickqa.AgentStatus{
-				Projects:  agent.Status.Projects,
-				RunStatus: agent.Status.RunStatus},
+				Projects:    agent.Status.Projects,
+				RunStatus:   agent.Status.RunStatus,
+				CurrentTest: &currentTest,
+			},
 		})
 		if err != nil {
 			// re-connect?
@@ -387,14 +433,14 @@ func (agent *Agent) HandleStatusUpdate() {
 func (agent *Agent) HandleGetCurrentStatus() {
 	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
 	for _, phase := range agent.Config.GetStatus {
-		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil)
+		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleBeforeGetTest() {
 	debug("Inside HandleBeforeGetTest, there are %d configs to process.", len(agent.Config.BeforeGetTest))
 	for _, phase := range agent.Config.BeforeGetTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -480,7 +526,7 @@ func (agent *Agent) HandleGetTest() {
 
 	// TODO Handle the new go version of slick, when it's finished
 	for _, phase := range agent.Config.GetTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -488,7 +534,7 @@ func (agent *Agent) HandleRunTest() {
 	debug("Inside HandleRunTest, there are %d configs to process.  Current Test:\n%+v", len(agent.Config.RunTest), agent.Status.ResultToRun)
 	log.Printf("Running result: %+v", GetTestInfo(agent.Status.ResultToRun))
 	for _, phase := range agent.Config.RunTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 	status := GetTestResult(agent.Status.ResultToRun)
 	if status == "" || status == "NO_RESULT" {
@@ -500,14 +546,14 @@ func (agent *Agent) HandleRunTest() {
 func (agent *Agent) HandleNoTest() {
 	debug("Inside HandleNoTest, there are %d configs to process.", len(agent.Config.NoTest))
 	for _, phase := range agent.Config.NoTest {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
 func (agent *Agent) HandleCleanup() {
 	debug("Inside HandleCleanup, there are %d configs to process.", len(agent.Config.Cleanup))
 	for _, phase := range agent.Config.Cleanup {
-		phase.ApplyToStatus(&agent.Status, nil, nil)
+		phase.ApplyToStatus(&agent.Status, nil, nil, nil)
 	}
 }
 
@@ -521,7 +567,44 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
-func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string) error {
+func (agent *Agent) startScreenShots(endpoint string, accessKeyID string, secretAccessKey string, bucketName string, location string) {
+	useSSL := true
+
+	// Initialize minio client object.
+	minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	// Make the bucket
+
+	exists, err := minioClient.BucketExists(bucketName)
+	if err != nil {
+		log.Printf("error when checking if bucket %s exists\n", bucketName)
+	}
+	if !exists {
+		err = minioClient.MakeBucket(bucketName, location)
+		if err != nil {
+			log.Printf("error creating bucket %s\n", err)
+		} else {
+			log.Printf("Successfully created %s\n", bucketName)
+		}
+	}
+
+	// Upload the screenshot
+	objectName := "slick-agen.tar.gz"
+	filePath := "slick-agent.tar.gz"
+	contentType := "application/x-gzip"
+
+	// Upload the zip file with FPutObject
+	n, err := minioClient.FPutObject(bucketName, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
+	if err != nil {
+		log.Printf("error uploading screenshot %s\n", err)
+	}
+
+	log.Printf("Successfully uploaded %s of size %d\n", objectName, n)
+}
+
+func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string, staticMap *map[string]string) error {
 	if conf.Command != "" {
 		tmpfile, err := ioutil.TempFile("", "slick-agent-status-*.yml")
 		tmpFilename := tmpfile.Name()
@@ -596,7 +679,10 @@ func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *st
 			log.Printf("Attempted to set static list %+v but that is invalid during this phase, ignoring.", conf.StaticList)
 			return fmt.Errorf("nil staticArray, can't set value %#v during this phase", conf.StaticList)
 		}
-	} else if len(conf.StaticMap) > 0 {
+	} else if len(conf.StaticMap) > 0 && staticMap != nil {
+		for k, v := range conf.StaticMap {
+			(*staticMap)[k] = v
+		}
 	}
 
 	return nil
@@ -615,6 +701,7 @@ func GetTestResult(test map[string]interface{}) string {
 }
 
 func GetTestInfo(test map[string]interface{}) TestcaseInfo {
+	var retval TestcaseInfo
 	testcase, ok := test["testcase"]
 	if !ok {
 		return TestcaseInfo{}
@@ -623,10 +710,24 @@ func GetTestInfo(test map[string]interface{}) TestcaseInfo {
 	if !ok {
 		return TestcaseInfo{}
 	}
-	retval := TestcaseInfo{
-		Id:           test["id"].(string),
-		Name:         testref["name"].(string),
-		AutomationId: testref["automationId"].(string),
+	testrun, ok := test["testrun"]
+	if !ok {
+		return TestcaseInfo{}
+	}
+	testrunRef, ok := testrun.(map[string]interface{})
+	if !ok {
+		retval = TestcaseInfo{
+			Id:           test["id"].(string),
+			Name:         testref["name"].(string),
+			AutomationId: testref["automationId"].(string),
+		}
+	} else {
+		retval = TestcaseInfo{
+			Id:           test["id"].(string),
+			Name:         testref["name"].(string),
+			AutomationId: testref["automationId"].(string),
+			TestrunId:    testrunRef["testrunId"].(string),
+		}
 	}
 	return retval
 }
