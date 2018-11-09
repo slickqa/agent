@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kbinani/screenshot"
 	"github.com/minio/minio-go"
 	"github.com/namsral/flag"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
+	"image/png"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -75,7 +77,7 @@ func main() {
 		Endpoint:        os.Getenv("S3ENDPOINT"),
 		AccessKeyID:     "leeard",
 		SecretAccessKey: os.Getenv("S3SECRETKEY"),
-		BucketName:      "slickAgentScreenshots",
+		BucketName:      "agentscreenshots",
 		Location:        "utah-higg-trailer",
 	}
 	agent.S3Storage = s3Options
@@ -84,6 +86,7 @@ func main() {
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
 
+	go agent.startScreenShots(4)
 	for !agent.Status.ShouldExit {
 		debugln("Top of loop, initializing status.")
 		agent.Status = agent.DefaultStatus()
@@ -567,41 +570,60 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
-func (agent *Agent) startScreenShots(endpoint string, accessKeyID string, secretAccessKey string, bucketName string, location string) {
+func (a *Agent) startScreenShots(secondsBetween int) {
 	useSSL := true
+	endPoint := a.S3Storage.Endpoint
+	accessKey := a.S3Storage.AccessKeyID
+	secret := a.S3Storage.SecretAccessKey
+	bucket := a.S3Storage.BucketName
+	location := a.S3Storage.Location
 
 	// Initialize minio client object.
-	minioClient, err := minio.New(endpoint, accessKeyID, secretAccessKey, useSSL)
+	minioClient, err := minio.New(endPoint, accessKey, secret, useSSL)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	// Make the bucket
 
-	exists, err := minioClient.BucketExists(bucketName)
+	exists, err := minioClient.BucketExists(bucket)
 	if err != nil {
-		log.Printf("error when checking if bucket %s exists\n", bucketName)
+		log.Printf("error when checking if bucket %s exists\n", bucket)
 	}
 	if !exists {
-		err = minioClient.MakeBucket(bucketName, location)
+		err = minioClient.MakeBucket(bucket, location)
 		if err != nil {
 			log.Printf("error creating bucket %s\n", err)
 		} else {
-			log.Printf("Successfully created %s\n", bucketName)
+			log.Printf("Successfully created %s\n", bucket)
 		}
 	}
 
-	// Upload the screenshot
-	objectName := "slick-agen.tar.gz"
-	filePath := "slick-agent.tar.gz"
-	contentType := "application/x-gzip"
+	bounds := screenshot.GetDisplayBounds(0)
 
-	// Upload the zip file with FPutObject
-	n, err := minioClient.FPutObject(bucketName, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
-	if err != nil {
-		log.Printf("error uploading screenshot %s\n", err)
+	fmt.Printf("Starting screenshot loop\n")
+	for {
+		img, err := screenshot.CaptureRect(bounds)
+		if err != nil {
+			panic(err)
+		}
+		fileName := a.Config.Slick.AgentName + "-screenshot.png"
+		file, _ := os.Create(fileName)
+		png.Encode(file, img)
+		file.Close()
+
+		// Upload the screenshot
+		objectName := fileName
+		filePath := fileName
+		contentType := "image/png"
+
+		// Upload the zip file with FPutObject
+		_, err = minioClient.FPutObject(bucket, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
+		if err != nil {
+			log.Printf("error uploading screenshot %s\n", err)
+		}
+
 	}
 
-	log.Printf("Successfully uploaded %s of size %d\n", objectName, n)
 }
 
 func (conf *PhaseConfiguration) ApplyToStatus(status *AgentStatus, staticVar *string, staticArray *[]string, staticMap *map[string]string) error {

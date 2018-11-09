@@ -10,3 +10,4 @@ deps:
 	go get -u github.com/minio/minio-go
 	go get -u github.com/namsral/flag
 	go get -u gopkg.in/yaml.v2
+	go get -u github.com/kbinani/screenshot
