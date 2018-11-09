@@ -86,7 +86,7 @@ func main() {
 	output, _ := yaml.Marshal(agent.Config)
 	log.Printf("Configuration:\n%s", string(output))
 
-	go agent.startScreenShots(4)
+	go agent.startScreenShots()
 	for !agent.Status.ShouldExit {
 		debugln("Top of loop, initializing status.")
 		agent.Status = agent.DefaultStatus()
@@ -570,7 +570,7 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
-func (a *Agent) startScreenShots(secondsBetween int) {
+func (a *Agent) startScreenShots() {
 	useSSL := true
 	endPoint := a.S3Storage.Endpoint
 	accessKey := a.S3Storage.AccessKeyID
@@ -604,7 +604,7 @@ func (a *Agent) startScreenShots(secondsBetween int) {
 	for {
 		img, err := screenshot.CaptureRect(bounds)
 		if err != nil {
-			panic(err)
+			fmt.Printf("error grabbing screenshot %s\n", err)
 		}
 		fileName := a.Config.Slick.AgentName + "-screenshot.png"
 		file, _ := os.Create(fileName)
@@ -620,8 +620,10 @@ func (a *Agent) startScreenShots(secondsBetween int) {
 		_, err = minioClient.FPutObject(bucket, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
 		if err != nil {
 			log.Printf("error uploading screenshot %s\n", err)
+		} else {
+			//TODO: update timestamp
 		}
-
+		time.Sleep(4 * time.Second)
 	}
 
 }
