@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kbinani/screenshot"
+	"github.com/vova616/screenshot"
 	"github.com/namsral/flag"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
@@ -601,7 +601,7 @@ func uploadFile(filename string, url string, contentType string) {
 }
 
 func (a *Agent) startScreenShots() {
-	bounds := screenshot.GetDisplayBounds(0)
+	//bounds := screenshot.GetDisplayBounds(0)
 	if a.Slick != nil {
 		var link *slickqa.Link
 		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company:a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
@@ -642,9 +642,9 @@ func (a *Agent) startScreenShots() {
 			log.Print("ERROR: Unable to find or create a link for the screenshot!")
 			return
 		}
-		fmt.Printf("Starting screenshot loop\n")
+		fmt.Printf("Starting (vova) screenshot loop \n")
 		for {
-			img, err := screenshot.CaptureRect(bounds)
+			img, err := screenshot.CaptureScreen()
 			if err != nil {
 				fmt.Printf("error grabbing screenshot %s\n", err)
 			}
