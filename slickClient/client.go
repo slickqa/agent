@@ -19,6 +19,7 @@ type SlickClient struct {
 	GrpcUrl string
 	Token string
 	Agents slickqa.AgentsClient
+	Links slickqa.LinksClient
 	connection *grpc.ClientConn
 	jwtToken string
 	expires  time.Time
@@ -39,6 +40,7 @@ func CreateClient(grpcUrl string, token string) (*SlickClient, error) {
 	s.connection = conn
 	//defer conn.Close()
 	s.Agents = slickqa.NewAgentsClient(conn)
+	s.Links = slickqa.NewLinksClient(conn)
 	return s, nil
 }
 

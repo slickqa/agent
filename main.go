@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/kbinani/screenshot"
-	"github.com/minio/minio-go"
 	"github.com/namsral/flag"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
@@ -501,30 +500,32 @@ func (agent *Agent) RequestResultFromSlickQueue(query map[string]interface{}) ma
 
 func (agent *Agent) HandleGetTest() {
 	debug("Inside HandleGetTest, there are %d configs to process.", len(agent.Config.GetTest))
-	// first get the test from slick, then call everything else
-	query := make(map[string]interface{})
-	query["provides"] = agent.Status.getNonBrokenProvides()
-	for key, value := range agent.Status.RequiredTestAttributes {
-		query[key] = value
-	}
-
-	if len(agent.Status.Projects) > 0 {
-		for _, project := range agent.Status.Projects {
-			projectQuery := query
-			projectQuery["project"] = project.Project
-			if project.Release != "" {
-				projectQuery["release"] = project.Release
-			}
-			if project.Build != "" {
-				projectQuery["build"] = project.Build
-			}
-			agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(projectQuery)
-			if agent.Status.ResultToRun != nil {
-				break
-			}
+	if agent.Config.Slick.BaseUrl != "" {
+		// first get the test from slick, then call everything else
+		query := make(map[string]interface{})
+		query["provides"] = agent.Status.getNonBrokenProvides()
+		for key, value := range agent.Status.RequiredTestAttributes {
+			query[key] = value
 		}
-	} else {
-		agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(query)
+
+		if len(agent.Status.Projects) > 0 {
+			for _, project := range agent.Status.Projects {
+				projectQuery := query
+				projectQuery["project"] = project.Project
+				if project.Release != "" {
+					projectQuery["release"] = project.Release
+				}
+				if project.Build != "" {
+					projectQuery["build"] = project.Build
+				}
+				agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(projectQuery)
+				if agent.Status.ResultToRun != nil {
+					break
+				}
+			}
+		} else {
+			agent.Status.ResultToRun = agent.RequestResultFromSlickQueue(query)
+		}
 	}
 
 	// TODO Handle the new go version of slick, when it's finished
@@ -570,60 +571,103 @@ func (agent *Agent) HandleSleep() {
 	}
 }
 
+func uploadFile(filename string, url string, contentType string) {
+	data, err := os.Open(filename)
+	if err != nil {
+		log.Printf("Unable to open file %s: %s", filename, err)
+		return
+	}
+	defer data.Close()
+	stat, err := data.Stat()
+	if err != nil {
+		log.Printf("Unable to stat file %s after opening: %s", filename, err.Error())
+		return
+	}
+	req, err := http.NewRequest("PUT", url, data)
+	if err != nil {
+		log.Printf("Unable to create request to upload file %s to %s: %s", filename, url, err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.ContentLength = stat.Size()
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error uploading file %s to %s: %s", filename, url, err.Error())
+		return
+	}
+	defer res.Body.Close()
+}
+
 func (a *Agent) startScreenShots() {
-	useSSL := true
-	endPoint := a.S3Storage.Endpoint
-	accessKey := a.S3Storage.AccessKeyID
-	secret := a.S3Storage.SecretAccessKey
-	bucket := a.S3Storage.BucketName
-	location := a.S3Storage.Location
-
-	// Initialize minio client object.
-	minioClient, err := minio.New(endPoint, accessKey, secret, useSSL)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	// Make the bucket
-
-	exists, err := minioClient.BucketExists(bucket)
-	if err != nil {
-		log.Printf("error when checking if bucket %s exists\n", bucket)
-	}
-	if !exists {
-		err = minioClient.MakeBucket(bucket, location)
-		if err != nil {
-			log.Printf("error creating bucket %s\n", err)
-		} else {
-			log.Printf("Successfully created %s\n", bucket)
-		}
-	}
-
 	bounds := screenshot.GetDisplayBounds(0)
-
-	fmt.Printf("Starting screenshot loop\n")
-	for {
-		img, err := screenshot.CaptureRect(bounds)
-		if err != nil {
-			fmt.Printf("error grabbing screenshot %s\n", err)
+	if a.Slick != nil {
+		var link *slickqa.Link
+		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company:a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
+		for _, potential := range links.Links {
+			if potential.Id.Name == "screen" {
+				link = potential
+				break
+			}
 		}
-		fileName := a.Config.Slick.AgentName + "-screenshot.png"
-		file, _ := os.Create(fileName)
-		png.Encode(file, img)
-		file.Close()
-
-		// Upload the screenshot
-		objectName := fileName
-		filePath := fileName
-		contentType := "image/png"
-
-		// Upload the zip file with FPutObject
-		_, err = minioClient.FPutObject(bucket, objectName, filePath, minio.PutObjectOptions{ContentType: contentType})
-		if err != nil {
-			log.Printf("error uploading screenshot %s\n", err)
-		} else {
-			//TODO: update timestamp
+		if len(links.Links) == 0 || err != nil || link == nil {
+			link = &slickqa.Link{
+				Id: &slickqa.LinkIdentity{
+					Company: a.Config.Company,
+					Project: "Agent",
+					EntityType: "Agent",
+					EntityId: a.Config.Slick.AgentName,
+					Name: "screen",
+				},
+				Type: "File",
+			}
+			links, err = a.Slick.Links.AddLink(context.Background(), link)
+			if err != nil {
+				log.Printf("ERROR: Unable to create link in slick for screenshot: %s", err)
+				return
+			}
+			if len(links.Links) == 0 {
+				log.Print("ERROR: Unable to create link in slick for screenshot, list returned was empty.")
+				return
+			}
 		}
-		time.Sleep(4 * time.Second)
+		for _, potential := range links.Links {
+			if potential.Id.Name == "screen" {
+				link = potential
+				break
+			}
+		}
+		if link == nil {
+			log.Print("ERROR: Unable to find or create a link for the screenshot!")
+			return
+		}
+		fmt.Printf("Starting screenshot loop\n")
+		for {
+			img, err := screenshot.CaptureRect(bounds)
+			if err != nil {
+				fmt.Printf("error grabbing screenshot %s\n", err)
+			}
+			fileName := a.Config.Slick.AgentName + "-screenshot.png"
+			file, _ := os.Create(fileName)
+			png.Encode(file, img)
+			file.Close()
+			uploadInfo := &slickqa.FileUploadInfo{
+				Id: link.Id,
+				FileName: fileName,
+				ContentType: "image/png",
+			}
+			uploadUrl, err := a.Slick.Links.GetUploadUrl(context.Background(), uploadInfo)
+			if err != nil {
+				log.Printf("Unable to get URL for uploading screenshot: %s", err)
+				continue
+			}
+			uploadFile(fileName, uploadUrl.Url, uploadInfo.ContentType)
+			a.Slick.Agents.UpdateScreenshotTimestamp(context.Background(), &slickqa.ScreenshotUpdateRequest{Id: &slickqa.AgentId{Company:a.Config.Company, Name:a.Config.Slick.AgentName}})
+			time.Sleep(4 * time.Second)
+		}
+	} else {
+		log.Printf("Slick grpc communication is nil, no screenshots will be taken.")
 	}
 
 }
