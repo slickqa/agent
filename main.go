@@ -434,6 +434,14 @@ func (agent *Agent) HandleStatusUpdate() {
 
 func (agent *Agent) HandleGetCurrentStatus() {
 	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
+	if agent.Slick != nil {
+		resp, err := agent.Slick.Agents.GetAgentRunStatus(context.Background(), &slickqa.AgentId{Company:agent.Config.Company, Name: agent.Config.Slick.AgentName})
+		if err == nil {
+			agent.Status.RunStatus = resp.RunStatus
+		} else {
+			log.Printf("ERROR: problem occurred while trying to get run status from slick: %s", err.Error())
+		}
+	}
 	for _, phase := range agent.Config.GetStatus {
 		phase.ApplyToStatus(&agent.Status, &agent.Status.RunStatus, nil, nil)
 	}
