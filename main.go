@@ -634,6 +634,8 @@ func (a *Agent) startScreenShots() {
 			img, err := screenshot.CaptureScreen()
 			if err != nil {
 				fmt.Printf("error grabbing screenshot %s\n", err)
+				time.Sleep(4 * time.Second)
+				continue
 			}
 			fileName := a.Config.Slick.AgentName + "-screenshot.png"
 			file, _ := os.Create(fileName)
