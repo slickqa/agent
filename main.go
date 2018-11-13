@@ -63,23 +63,11 @@ func main() {
 	}
 
 	if agent.Config.Slick.GrpcUrl != "" {
-		//TODO: get token dynamically
-		agent.Slick, err = slickClient.CreateClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
+		agent.Slick, err = slickClient.CreateClient(agent.Config.Slick.GrpcUrl, agent.Config.APIKey)
 		if err != nil {
 			log.Printf("Error creating slick client: %s", err)
 		}
 	}
-
-	// Configure S3 Storage
-	//TODO: add command line argument to turn on
-	var s3Options = S3CompatibleStorageOptions{
-		Endpoint:        os.Getenv("S3ENDPOINT"),
-		AccessKeyID:     "leeard",
-		SecretAccessKey: os.Getenv("S3SECRETKEY"),
-		BucketName:      "agentscreenshots",
-		Location:        "utah-higg-trailer",
-	}
-	agent.S3Storage = s3Options
 
 	agent.LastConfigurationCheck = time.Now()
 	output, _ := yaml.Marshal(agent.Config)
@@ -160,6 +148,7 @@ type ProjectReleaseBuild struct {
 
 type AgentConfiguration struct {
 	Company                    string                        `yaml:"company,omitempty"`
+	APIKey                     string                        `yaml:"api-key,omitempty"`
 	Projects                   []ProjectReleaseBuild         `yaml:"projects,omitempty"`
 	LoopStart                  []PhaseConfiguration          `yaml:"loop-start,omitempty"`
 	CheckForAction             []PhaseConfiguration          `yaml:"check-for-action,omitempty"`
@@ -189,17 +178,8 @@ type ParsedSleepOptions struct {
 	NoTest    time.Duration
 }
 
-type S3CompatibleStorageOptions struct {
-	Endpoint        string
-	AccessKeyID     string
-	SecretAccessKey string
-	BucketName      string
-	Location        string
-}
-
 type Agent struct {
 	Config                 AgentConfiguration
-	S3Storage              S3CompatibleStorageOptions
 	Status                 AgentStatus
 	LastConfigurationCheck time.Time
 	RanTest                bool
@@ -421,8 +401,7 @@ func (agent *Agent) HandleStatusUpdate() {
 			// re-connect?
 			agent.Slick.Close()
 			log.Printf("Trying to re-connect to slick")
-			//TODO: get token dynamically
-			slickClient, err := slickClient.CreateClient(agent.Config.Slick.GrpcUrl, "yomamasofat")
+			slickClient, err := slickClient.CreateClient(agent.Config.Slick.GrpcUrl, agent.Config.APIKey)
 			if err != nil {
 				log.Printf("Error re-connecting to slick: %s", err)
 			} else {
@@ -435,7 +414,7 @@ func (agent *Agent) HandleStatusUpdate() {
 func (agent *Agent) HandleGetCurrentStatus() {
 	debug("Inside HandleGetCurrentStatus, there are %d configs to process.", len(agent.Config.GetStatus))
 	if agent.Slick != nil {
-		resp, err := agent.Slick.Agents.GetAgentRunStatus(context.Background(), &slickqa.AgentId{Company:agent.Config.Company, Name: agent.Config.Slick.AgentName})
+		resp, err := agent.Slick.Agents.GetAgentRunStatus(context.Background(), &slickqa.AgentId{Company: agent.Config.Company, Name: agent.Config.Slick.AgentName})
 		if err == nil {
 			agent.Status.RunStatus = resp.RunStatus
 		} else {
