@@ -604,7 +604,7 @@ func (a *Agent) startScreenShots() {
 	//bounds := screenshot.GetDisplayBounds(0)
 	if a.Slick != nil {
 		var link *slickqa.Link
-		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company:a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
+		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company: a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
 		for _, potential := range links.Links {
 			if potential.Id.Name == "screen" {
 				link = potential
@@ -614,11 +614,11 @@ func (a *Agent) startScreenShots() {
 		if len(links.Links) == 0 || err != nil || link == nil {
 			link = &slickqa.Link{
 				Id: &slickqa.LinkIdentity{
-					Company: a.Config.Company,
-					Project: "Agent",
+					Company:    a.Config.Company,
+					Project:    "Agent",
 					EntityType: "Agent",
-					EntityId: a.Config.Slick.AgentName,
-					Name: "screen",
+					EntityId:   a.Config.Slick.AgentName,
+					Name:       "screen",
 				},
 				Type: "File",
 			}
@@ -642,7 +642,7 @@ func (a *Agent) startScreenShots() {
 			log.Print("ERROR: Unable to find or create a link for the screenshot!")
 			return
 		}
-		fmt.Printf("Starting screenshot loop\n")
+		fmt.Printf("Starting screenshot loop\n\n")
 		for {
 			img, err := screenshot.CaptureScreen()
 			if err != nil {
@@ -653,8 +653,8 @@ func (a *Agent) startScreenShots() {
 			png.Encode(file, img)
 			file.Close()
 			uploadInfo := &slickqa.FileUploadInfo{
-				Id: link.Id,
-				FileName: fileName,
+				Id:          link.Id,
+				FileName:    fileName,
 				ContentType: "image/png",
 			}
 			uploadUrl, err := a.Slick.Links.GetUploadUrl(context.Background(), uploadInfo)
@@ -663,7 +663,7 @@ func (a *Agent) startScreenShots() {
 				continue
 			}
 			uploadFile(fileName, uploadUrl.Url, uploadInfo.ContentType)
-			a.Slick.Agents.UpdateScreenshotTimestamp(context.Background(), &slickqa.ScreenshotUpdateRequest{Id: &slickqa.AgentId{Company:a.Config.Company, Name:a.Config.Slick.AgentName}})
+			a.Slick.Agents.UpdateScreenshotTimestamp(context.Background(), &slickqa.ScreenshotUpdateRequest{Id: &slickqa.AgentId{Company: a.Config.Company, Name: a.Config.Slick.AgentName}})
 			time.Sleep(4 * time.Second)
 		}
 	} else {
