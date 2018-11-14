@@ -8,7 +8,7 @@ import (
 	"github.com/namsral/flag"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
-	"github.com/vova616/screenshot"
+	"github.com/slickqa/screenshot"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
 	"image/png"
@@ -591,6 +591,17 @@ func (a *Agent) startScreenShots() {
 	//bounds := screenshot.GetDisplayBounds(0)
 	if a.Slick != nil {
 		var link *slickqa.Link
+		screen, err := screenshot.CreateScreenshotUtility()
+		if err != nil {
+			log.Printf("Error initializing screenshots! %s", err.Error())
+			time.Sleep(5 * time.Second)
+			screen, err = screenshot.CreateScreenshotUtility()
+			if err != nil {
+				return
+			}
+		}
+		defer screen.Close()
+
 		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company: a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
 		for _, potential := range links.Links {
 			if potential.Id.Name == "screen" {
@@ -631,7 +642,7 @@ func (a *Agent) startScreenShots() {
 		}
 		fmt.Printf("Starting screenshot loop\n\n")
 		for {
-			img, err := screenshot.CaptureScreen()
+			img, err := screen.CaptureScreen()
 			if err != nil {
 				fmt.Printf("error grabbing screenshot %s\n", err)
 				time.Sleep(4 * time.Second)
