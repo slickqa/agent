@@ -244,7 +244,7 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 					err = yaml.Unmarshal(buf, &config)
 				}
 			} else {
-				debug("Response had a bad status code of %d.  Full response:\n%+v", response)
+				debug("Response had a bad status code of %d.  Full response:\n%+v", response.StatusCode, response)
 				err = errors.New(fmt.Sprintf("http status code was %d", response.StatusCode))
 			}
 		}
