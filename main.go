@@ -85,22 +85,19 @@ func main() {
 		}
 		agent.HandleDiscoverTestAttributes()
 		agent.HandleDiscovery()
-		agent.HandleStatusUpdate()
 		agent.HandleBrokenDiscovery()
-		agent.HandleStatusUpdate()
 		agent.HandleGetCurrentStatus()
 		agent.HandleStatusUpdate()
+		agent.RanTest = false
 		if agent.Status.RunStatus == "IDLE" {
 			agent.HandleBeforeGetTest()
 			agent.HandleGetTest()
-			agent.HandleStatusUpdate()
 			if agent.Status.ResultToRun != nil {
 				agent.RanTest = true
 				agent.Status.RunStatus = "RUNNING"
 				agent.HandleStatusUpdate()
 				agent.HandleRunTest()
 			} else {
-				agent.RanTest = false
 				agent.HandleNoTest()
 			}
 			agent.HandleStatusUpdate()
