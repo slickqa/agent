@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/namsral/flag"
+	"github.com/slickqa/screenshot"
 	"github.com/slickqa/slick-agent/slickClient"
 	"github.com/slickqa/slick/slickqa"
-	"github.com/slickqa/screenshot"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
 	"image/png"
@@ -85,22 +85,19 @@ func main() {
 		}
 		agent.HandleDiscoverTestAttributes()
 		agent.HandleDiscovery()
-		agent.HandleStatusUpdate()
 		agent.HandleBrokenDiscovery()
-		agent.HandleStatusUpdate()
 		agent.HandleGetCurrentStatus()
 		agent.HandleStatusUpdate()
+		agent.RanTest = false
 		if agent.Status.RunStatus == "IDLE" {
 			agent.HandleBeforeGetTest()
 			agent.HandleGetTest()
-			agent.HandleStatusUpdate()
 			if agent.Status.ResultToRun != nil {
 				agent.RanTest = true
 				agent.Status.RunStatus = "RUNNING"
 				agent.HandleStatusUpdate()
 				agent.HandleRunTest()
 			} else {
-				agent.RanTest = false
 				agent.HandleNoTest()
 			}
 			agent.HandleStatusUpdate()
@@ -247,7 +244,7 @@ func LoadConfiguration() (AgentConfiguration, ParsedConfigurationOptions, error)
 					err = yaml.Unmarshal(buf, &config)
 				}
 			} else {
-				debug("Response had a bad status code of %d.  Full response:\n%+v", response)
+				debug("Response had a bad status code of %d.  Full response:\n%+v", response.StatusCode, response)
 				err = errors.New(fmt.Sprintf("http status code was %d", response.StatusCode))
 			}
 		}
@@ -590,7 +587,7 @@ func uploadFile(filename string, url string, contentType string) {
 func (a *Agent) startScreenShots() {
 	//bounds := screenshot.GetDisplayBounds(0)
 	if a.Slick != nil {
-		var link *slickqa.Link
+		var link *slickqa.Link = nil
 		screen, err := screenshot.CreateScreenshotUtility()
 		if err != nil {
 			log.Printf("Error initializing screenshots! %s", err.Error())
@@ -603,13 +600,15 @@ func (a *Agent) startScreenShots() {
 		defer screen.Close()
 
 		links, err := a.Slick.Links.GetLinks(context.Background(), &slickqa.LinkListIdentity{Company: a.Config.Company, Project: "Agent", EntityType: "Agent", EntityId: a.Config.Slick.AgentName})
-		for _, potential := range links.Links {
-			if potential.Id.Name == "screen" {
-				link = potential
-				break
+		if err == nil && links != nil && links.Links != nil && len(links.Links) > 0 {
+			for _, potential := range links.Links {
+				if potential.Id.Name == "screen" {
+					link = potential
+					break
+				}
 			}
 		}
-		if len(links.Links) == 0 || err != nil || link == nil {
+		if link == nil {
 			link = &slickqa.Link{
 				Id: &slickqa.LinkIdentity{
 					Company:    a.Config.Company,
@@ -630,15 +629,17 @@ func (a *Agent) startScreenShots() {
 				return
 			}
 		}
-		for _, potential := range links.Links {
-			if potential.Id.Name == "screen" {
-				link = potential
-				break
-			}
-		}
 		if link == nil {
-			log.Print("ERROR: Unable to find or create a link for the screenshot!")
-			return
+			for _, potential := range links.Links {
+				if potential.Id.Name == "screen" {
+					link = potential
+					break
+				}
+			}
+			if link == nil {
+				log.Print("ERROR: Unable to find or create a link for the screenshot!")
+				return
+			}
 		}
 		fmt.Printf("Starting screenshot loop\n\n")
 		for {
