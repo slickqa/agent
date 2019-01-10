@@ -146,6 +146,7 @@ type ProjectReleaseBuild struct {
 type AgentConfiguration struct {
 	Company                    string                        `yaml:"company,omitempty"`
 	APIKey                     string                        `yaml:"api-key,omitempty"`
+	Groups                     []string                      `yaml:"groups,omitempty"`
 	Projects                   []ProjectReleaseBuild         `yaml:"projects,omitempty"`
 	LoopStart                  []PhaseConfiguration          `yaml:"loop-start,omitempty"`
 	CheckForAction             []PhaseConfiguration          `yaml:"check-for-action,omitempty"`
@@ -318,6 +319,10 @@ func (agent *Agent) CheckConfiguration() {
 			log.Printf("Error loading configuration, using old configuration: %s", err.Error())
 		}
 		agent.LastConfigurationCheck = time.Now()
+	}
+	if agent.Config.Groups != nil && len(agent.Config.Groups) > 0 {
+		debug("Copying %d groups from config to status", len(agent.Config.Groups))
+		copy(agent.Status.Groups, agent.Config.Groups)
 	}
 }
 
