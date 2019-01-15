@@ -321,8 +321,10 @@ func (agent *Agent) CheckConfiguration() {
 		agent.LastConfigurationCheck = time.Now()
 	}
 	if agent.Config.Groups != nil && len(agent.Config.Groups) > 0 {
-		debug("Copying %d groups from config to status", len(agent.Config.Groups))
-		copy(agent.Status.Groups, agent.Config.Groups)
+		var groups []string
+		groups = append(groups, ProgramOptions.Groups...)
+		groups = append(groups, agent.Config.Groups...)
+		agent.Status.Groups = groups
 	}
 }
 
