@@ -402,7 +402,7 @@ func (agent *Agent) HandleStatusUpdate() {
 				Projects:    agent.Status.Projects,
 				RunStatus:   agent.Status.RunStatus,
 				CurrentTest: &currentTest,
-				Groups: agent.Status.Groups,
+				Groups:      agent.Status.Groups,
 			},
 		})
 		if err != nil {
