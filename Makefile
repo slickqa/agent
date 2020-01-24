@@ -7,9 +7,3 @@ build:
 clean:
 	rm -rf build
 
-deps:
-	go get -u github.com/slickqa/slick
-	go get -u github.com/namsral/flag
-	go get -u gopkg.in/yaml.v2
-	go get -u github.com/slickqa/screenshot
-	go get -u github.com/BurntSushi/xgb
